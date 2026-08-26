@@ -9,9 +9,9 @@
   let busy = false;
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * INPUT / TEXTAREA
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   function isInput(el) {
@@ -37,9 +37,9 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * FIND EDITABLE
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   function findEditable(node) {
@@ -75,15 +75,17 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * GET CURRENT SELECTION
    *
    * IMPORTANT:
+   * No selectionchange listener.
+   * No keyup listener.
+   * No mouseup listener.
    *
-   * There are NO selectionchange / keyup / mouseup listeners.
-   *
-   * The extension only looks at the page when explicitly asked.
-   * ------------------------------------------------------------
+   * The extension only checks the selection when explicitly
+   * requested.
+   * ============================================================
    */
 
   function getSelectionNow() {
@@ -92,7 +94,9 @@
     );
 
     /*
-     * Normal input / textarea
+     * ----------------------------------------------------------
+     * INPUT / TEXTAREA
+     * ----------------------------------------------------------
      */
 
     if (active && isInput(active)) {
@@ -118,7 +122,9 @@
 
 
     /*
-     * Rich text
+     * ----------------------------------------------------------
+     * CONTENTEDITABLE
+     * ----------------------------------------------------------
      */
 
     const selection =
@@ -157,9 +163,9 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * SAVE SELECTION
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   function saveSelection() {
@@ -170,8 +176,11 @@
       return false;
     }
 
+
     /*
+     * ----------------------------------------------------------
      * INPUT / TEXTAREA
+     * ----------------------------------------------------------
      */
 
     if (current.type === "input") {
@@ -190,15 +199,16 @@
       return true;
     }
 
+
     /*
+     * ----------------------------------------------------------
      * RICH TEXT
      *
      * We intentionally do NOT save a DOM Range.
      *
-     * A Range can become invalid or cause framework editors
-     * such as X/LinkedIn/Discord to lose their internal state.
-     *
-     * We only remember the selected text.
+     * This prevents us from keeping a live Range inside
+     * framework-controlled editors such as X/LinkedIn/Discord.
+     * ----------------------------------------------------------
      */
 
     if (current.type === "rich") {
@@ -217,9 +227,9 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * MESSAGE HANDLER
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   chrome.runtime.onMessage.addListener(
@@ -261,10 +271,6 @@
         message?.type ===
         "GPT_OPEN_ACTIONS"
       ) {
-        /*
-         * Capture once, immediately.
-         */
-
         saveSelection();
 
         showActions();
@@ -298,9 +304,9 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * GPT ACTION
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   async function doAction(action) {
@@ -311,9 +317,10 @@
       };
     }
 
+
     /*
-     * If popup/background didn't give us a saved selection,
-     * try once now.
+     * If there is no saved selection yet,
+     * try once to get the current selection.
      */
 
     if (!savedText.trim()) {
@@ -350,6 +357,12 @@
           },
           (response) => {
 
+            /*
+             * --------------------------------------------------
+             * CONNECTION ERROR
+             * --------------------------------------------------
+             */
+
             if (
               chrome.runtime.lastError
             ) {
@@ -370,6 +383,13 @@
               return;
             }
 
+
+            /*
+             * --------------------------------------------------
+             * GPT ERROR
+             * --------------------------------------------------
+             */
+
             if (!response?.ok) {
               busy = false;
 
@@ -386,6 +406,13 @@
 
               return;
             }
+
+
+            /*
+             * --------------------------------------------------
+             * REPLACE
+             * --------------------------------------------------
+             */
 
             try {
               replaceSelection(
@@ -411,14 +438,14 @@
               busy = false;
 
               showToast(
-                error.message ||
+                error?.message ||
                 "Could not replace the selection."
               );
 
               resolve({
                 ok: false,
                 error:
-                  error.message ||
+                  error?.message ||
                   "Could not replace the selection."
               });
             }
@@ -430,9 +457,9 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * REPLACE SELECTION
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   function replaceSelection(text) {
@@ -447,7 +474,7 @@
      * ==========================================================
      * INPUT / TEXTAREA
      *
-     * SAFE
+     * These are safe to replace.
      * ==========================================================
      */
 
@@ -469,8 +496,9 @@
         "end"
       );
 
+
       /*
-       * Notify frameworks.
+       * Notify React/Vue/etc.
        */
 
       try {
@@ -508,17 +536,17 @@
      *
      * IMPORTANT:
      *
-     * We intentionally DO NOT modify X/LinkedIn/Discord here.
+     * We intentionally do NOT modify rich-text editors yet.
      *
-     * We do NOT:
+     * We do NOT use:
      *
-     * - use execCommand()
-     * - use Range.deleteContents()
-     * - use Range.insertNode()
-     * - change innerHTML
-     * - dispatch fake keyboard events
+     * - execCommand()
+     * - Range.deleteContents()
+     * - Range.insertNode()
+     * - innerHTML
+     * - fake keyboard events
      *
-     * Doing those things can break framework-managed editors.
+     * This prevents X/LinkedIn/Discord from becoming locked.
      * ==========================================================
      */
 
@@ -529,9 +557,9 @@
 
 
   /*
-   * ------------------------------------------------------------
-   * CLEAR
-   * ------------------------------------------------------------
+   * ============================================================
+   * CLEAR STATE
+   * ============================================================
    */
 
   function clearState() {
@@ -543,9 +571,9 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * TOAST
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   function showToast(message) {
@@ -610,16 +638,15 @@
 
 
   /*
-   * ------------------------------------------------------------
+   * ============================================================
    * ACTION MENU
-   * ------------------------------------------------------------
+   * ============================================================
    */
 
   function showActions() {
     /*
-     * Do NOT capture again.
-     *
-     * The selection was already saved before this UI appeared.
+     * The selection was already captured before the menu
+     * appeared.
      */
 
     const old =
@@ -630,6 +657,11 @@
     if (old) {
       old.remove();
     }
+
+
+    /*
+     * Create menu.
+     */
 
     const box =
       document.createElement(
@@ -663,6 +695,7 @@
       }
     );
 
+
     box.innerHTML = `
       <b>✨ GPT Text Corrector</b>
 
@@ -676,6 +709,11 @@
         Choose an action for your selected text
       </div>
     `;
+
+
+    /*
+     * Actions.
+     */
 
     [
       ["correct", "✨ Correct"],
@@ -719,6 +757,7 @@
           }
         );
 
+
         button.addEventListener(
           "click",
           async (event) => {
@@ -740,14 +779,15 @@
       }
     );
 
+
     document.documentElement
       .appendChild(box);
 
+
     /*
-     * Close menu on outside click.
+     * Close when clicking outside.
      *
-     * We do NOT preventDefault.
-     * We do NOT touch keyboard input.
+     * We do not prevent the site's normal editor behavior.
      */
 
     setTimeout(() => {
@@ -778,4 +818,5 @@
 
     }, 0);
   }
+
 })();
