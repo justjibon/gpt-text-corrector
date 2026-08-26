@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V19__) return;
-  window.__GPT_TEXT_CORRECTOR_V19__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V20__) return;
+  window.__GPT_TEXT_CORRECTOR_V20__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
@@ -10,94 +10,36 @@
   let savedType = null;
   let busy = false;
 
-  // ============================================================
-  // EDITOR DETECTION
-  // ============================================================
-
   function isInput(el) {
     if (!el) return false;
-
-    if (el.tagName === "TEXTAREA") {
-      return true;
-    }
-
+    if (el.tagName === "TEXTAREA") return true;
     if (el.tagName === "INPUT") {
-      return [
-        "text",
-        "search",
-        "email",
-        "url"
-      ].includes(
+      return ["text", "search", "email", "url"].includes(
         (el.type || "").toLowerCase()
       );
     }
-
     return false;
   }
 
   function findEditable(node) {
     if (!node) return null;
-
-    if (node.nodeType === Node.TEXT_NODE) {
-      node = node.parentElement;
-    }
-
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
     if (!node) return null;
-
-    if (isInput(node)) {
-      return node;
-    }
-
-    if (node.isContentEditable) {
-      return node;
-    }
-
-    const closest = node.closest?.(
-      [
-        "textarea",
-        'input[type="text"]',
-        'input[type="search"]',
-        'input[type="email"]',
-        'input[type="url"]',
-        '[contenteditable="true"]',
-        '[role="textbox"]'
-      ].join(",")
-    );
-
-    return closest || null;
+    if (isInput(node) || node.isContentEditable) return node;
+    return node.closest?.(
+      'textarea,input[type="text"],input[type="search"],input[type="email"],input[type="url"],[contenteditable="true"],[role="textbox"]'
+    ) || null;
   }
 
-
-  // ============================================================
-  // CAPTURE SELECTION
-  // ============================================================
-
   function captureSelection() {
-    const active =
-      findEditable(document.activeElement);
-
-    // ----------------------------------------------------------
-    // INPUT / TEXTAREA
-    // ----------------------------------------------------------
+    const active = findEditable(document.activeElement);
 
     if (active && isInput(active)) {
-      const start =
-        typeof active.selectionStart === "number"
-          ? active.selectionStart
-          : 0;
-
-      const end =
-        typeof active.selectionEnd === "number"
-          ? active.selectionEnd
-          : 0;
+      const start = active.selectionStart ?? 0;
+      const end = active.selectionEnd ?? 0;
 
       if (start !== end) {
-        const text =
-          active.value.substring(
-            start,
-            end
-          );
-
+        const text = active.value.substring(start, end);
         if (text.trim()) {
           savedEditable = active;
           savedStart = start;
@@ -105,63 +47,31 @@
           savedRange = null;
           savedText = text;
           savedType = "input";
-
           return true;
         }
       }
     }
 
-
-    // ----------------------------------------------------------
-    // RICH TEXT
-    // ----------------------------------------------------------
-
-    const selection =
-      window.getSelection();
-
-    if (
-      !selection ||
-      selection.rangeCount === 0 ||
-      selection.isCollapsed
-    ) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
       return false;
     }
 
-    const range =
-      selection.getRangeAt(0);
+    const range = selection.getRangeAt(0);
+    const editable = findEditable(range.commonAncestorContainer);
+    if (!editable) return false;
 
-    const editable =
-      findEditable(
-        range.commonAncestorContainer
-      );
-
-    if (!editable) {
-      return false;
-    }
-
-    const text =
-      selection.toString();
-
-    if (!text.trim()) {
-      return false;
-    }
+    const text = selection.toString();
+    if (!text.trim()) return false;
 
     savedEditable = editable;
-    savedRange =
-      range.cloneRange();
-
+    savedRange = range.cloneRange();
     savedStart = 0;
     savedEnd = 0;
     savedText = text;
     savedType = "rich";
-
     return true;
   }
-
-
-  // ============================================================
-  // CLEAR
-  // ============================================================
 
   function clearSelectionState() {
     savedEditable = null;
@@ -172,218 +82,99 @@
     savedType = null;
   }
 
-
-  // ============================================================
-  // MESSAGE HANDLER
-  // ============================================================
-
-  chrome.runtime.onMessage.addListener(
-    (message, sender, sendResponse) => {
-
-      if (
-        message?.type ===
-        "GPT_GET_SELECTION"
-      ) {
-        const ok =
-          captureSelection();
-
-        sendResponse({
-          ok: true,
-          hasSelection:
-            ok &&
-            !!savedText.trim()
-        });
-
-        return;
-      }
-
-
-      if (
-        message?.type ===
-        "GPT_OPEN_ACTIONS"
-      ) {
-        captureSelection();
-
-        showActions();
-
-        sendResponse({
-          ok: true,
-          hasSelection:
-            !!savedText.trim()
-        });
-
-        return;
-      }
-
-
-      if (
-        message?.type ===
-        "GPT_DO_ACTION"
-      ) {
-        doAction(
-          message.action || "correct"
-        ).then(sendResponse);
-
-        return true;
-      }
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === "GPT_GET_SELECTION") {
+      const ok = captureSelection();
+      sendResponse({ ok: true, hasSelection: ok && !!savedText.trim() });
+      return;
     }
-  );
 
+    if (message?.type === "GPT_OPEN_ACTIONS") {
+      captureSelection();
+      showActions();
+      sendResponse({ ok: true, hasSelection: !!savedText.trim() });
+      return;
+    }
 
-  // ============================================================
-  // GPT ACTION
-  // ============================================================
+    if (message?.type === "GPT_DO_ACTION") {
+      doAction(message.action || "correct").then(sendResponse);
+      return true;
+    }
+  });
 
   async function doAction(action) {
-    if (busy) {
-      return {
-        ok: false,
-        error: "Already working."
-      };
-    }
+    if (busy) return { ok: false, error: "Already working." };
+
+    if (!savedText.trim()) captureSelection();
 
     if (!savedText.trim()) {
-      captureSelection();
-    }
-
-    if (!savedText.trim()) {
-      showToast(
-        "Select some text first."
-      );
-
-      return {
-        ok: false,
-        error:
-          "Select some text first."
-      };
+      showToast("Select some text first.");
+      return { ok: false, error: "Select some text first." };
     }
 
     busy = true;
+    const original = savedText;
+    showToast("Working…");
 
-    const original =
-      savedText;
-
-    showToast(
-      "Working…"
-    );
-
-    return new Promise(
-      (resolve) => {
-
-        chrome.runtime.sendMessage(
-          {
-            type: "GPT_CORRECT",
-            text: original,
-            action
-          },
-          async (response) => {
-
-            if (
-              chrome.runtime.lastError
-            ) {
-              busy = false;
-
-              showToast(
-                "Could not reach GPT."
-              );
-
-              resolve({
-                ok: false,
-                error:
-                  chrome.runtime
-                    .lastError
-                    .message
-              });
-
-              return;
-            }
-
-
-            if (!response?.ok) {
-              busy = false;
-
-              showToast(
-                response?.error ||
-                "GPT request failed."
-              );
-
-              resolve(
-                response || {
-                  ok: false
-                }
-              );
-
-              return;
-            }
-
-
-            try {
-              await replaceSelection(
-                response.text
-              );
-
-              showToast(
-                "Done ✓"
-              );
-
-              busy = false;
-
-              resolve({
-                ok: true
-              });
-
-            } catch (error) {
-              console.error(
-                "GPT Text Corrector:",
-                error
-              );
-
-              busy = false;
-
-              showToast(
-                error?.message ||
-                "Could not replace the selection."
-              );
-
-              resolve({
-                ok: false,
-                error:
-                  error?.message ||
-                  "Could not replace the selection."
-              });
-            }
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { type: "GPT_CORRECT", text: original, action },
+        async (response) => {
+          if (chrome.runtime.lastError) {
+            busy = false;
+            showToast("Could not reach GPT.");
+            resolve({
+              ok: false,
+              error: chrome.runtime.lastError.message
+            });
+            return;
           }
-        );
-      }
-    );
+
+          if (!response?.ok) {
+            busy = false;
+            showToast(response?.error || "GPT request failed.");
+            resolve(response || { ok: false });
+            return;
+          }
+
+          try {
+            await replaceSelection(response.text);
+            showToast("Done ✓");
+            busy = false;
+            resolve({ ok: true });
+          } catch (error) {
+            console.error("GPT Text Corrector:", error);
+            busy = false;
+            showToast(error?.message || "Could not replace the selection.");
+            resolve({
+              ok: false,
+              error: error?.message || "Could not replace the selection."
+            });
+          }
+        }
+      );
+    });
   }
 
-
-  // ============================================================
-  // INPUT / TEXTAREA REPLACEMENT
-  // ============================================================
+  function restoreInputSelection() {
+    if (!savedEditable || !isInput(savedEditable)) {
+      throw new Error("Input editor not found.");
+    }
+    savedEditable.focus();
+    savedEditable.setSelectionRange(savedStart, savedEnd);
+  }
 
   function replaceInput(text) {
-    const input =
-      savedEditable;
+    restoreInputSelection();
 
-    if (
-      !input ||
-      !isInput(input)
-    ) {
+    const current = savedEditable.value.substring(savedStart, savedEnd);
+    if (savedText && current !== savedText) {
       throw new Error(
-        "Input editor not found."
+        "The selected text changed while GPT was working. Nothing was replaced."
       );
     }
 
-    input.focus();
-
-    input.setSelectionRange(
-      savedStart,
-      savedEnd
-    );
-
-    input.setRangeText(
+    savedEditable.setRangeText(
       text,
       savedStart,
       savedEnd,
@@ -391,264 +182,109 @@
     );
 
     try {
-      input.dispatchEvent(
-        new InputEvent(
-          "input",
-          {
-            bubbles: true,
-            inputType:
-              "insertReplacementText",
-            data: text
-          }
-        )
+      savedEditable.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertReplacementText",
+          data: text
+        })
       );
     } catch {
-      input.dispatchEvent(
-        new Event(
-          "input",
-          {
-            bubbles: true
-          }
-        )
-      );
+      savedEditable.dispatchEvent(new Event("input", { bubbles: true }));
     }
 
-    input.dispatchEvent(
-      new Event(
-        "change",
-        {
-          bubbles: true
-        }
-      )
-    );
-
+    savedEditable.dispatchEvent(new Event("change", { bubbles: true }));
     clearSelectionState();
   }
 
-
-  // ============================================================
-  // RESTORE RICH-TEXT SELECTION
-  // ============================================================
-
-  function restoreRange() {
-    if (!savedRange) {
-      throw new Error(
-        "Original selection was lost."
-      );
+  function restoreRichSelection() {
+    if (!savedEditable || !savedRange) {
+      throw new Error("Rich-text selection was lost.");
     }
 
-    const selection =
-      window.getSelection();
+    savedEditable.focus();
 
+    const selection = window.getSelection();
     if (!selection) {
-      throw new Error(
-        "Browser selection is unavailable."
-      );
+      throw new Error("Browser selection is unavailable.");
     }
 
     selection.removeAllRanges();
-
-    selection.addRange(
-      savedRange.cloneRange()
-    );
-
+    selection.addRange(savedRange.cloneRange());
     return selection;
   }
 
-
-  // ============================================================
-  // DIRECT EDITOR REPLACEMENT
-  //
-  // Rich-text editors (X, LinkedIn, Discord, etc.) are controlled
-  // applications. We do NOT delete/insert DOM nodes ourselves.
-  //
-  // Instead, restore the user's selection and let the browser's
-  // editing command perform the replacement. This keeps the
-  // editor's own input/change pipeline intact and avoids the
-  // debugger API, clipboard workflow, and floating UI.
-  // ============================================================
-
-  function restoreOriginalSelection() {
-    if (!savedEditable) {
-      throw new Error("Editor not found.");
-    }
-
-    if (savedType === "input") {
-      savedEditable.focus();
-      savedEditable.setSelectionRange(
-        savedStart,
-        savedEnd
-      );
-      return;
-    }
-
-    if (savedType === "rich" && savedRange) {
-      savedEditable.focus();
-
-      const selection = window.getSelection();
-
-      if (!selection) {
-        throw new Error(
-          "Browser selection is unavailable."
-        );
-      }
-
-      selection.removeAllRanges();
-      selection.addRange(
-        savedRange.cloneRange()
-      );
-      return;
-    }
-
-    throw new Error(
-      "Original selection was lost."
-    );
-  }
-
-
-  function replaceInput(text) {
-    const input = savedEditable;
-
-    if (!input || !isInput(input)) {
-      throw new Error("Input editor not found.");
-    }
-
-    restoreOriginalSelection();
-
-    const current =
-      input.value.substring(
-        savedStart,
-        savedEnd
-      );
-
-    if (
-      savedText &&
-      current !== savedText
-    ) {
-      throw new Error(
-        "The selected text changed while GPT was working. Nothing was replaced."
-      );
-    }
-
-    input.setRangeText(
-      text,
-      savedStart,
-      savedEnd,
-      "end"
-    );
-
-    /*
-     * setRangeText changes the real input value. Notify the
-     * framework using the normal input event.
-     */
-    try {
-      input.dispatchEvent(
-        new InputEvent(
-          "input",
-          {
-            bubbles: true,
-            inputType:
-              "insertReplacementText",
-            data: text
-          }
-        )
-      );
-    } catch {
-      input.dispatchEvent(
-        new Event(
-          "input",
-          {
-            bubbles: true
-          }
-        )
-      );
-    }
-
-    input.dispatchEvent(
-      new Event(
-        "change",
-        {
-          bubbles: true
-        }
-      )
-    );
-
-    clearSelectionState();
-  }
-
-
+  /*
+   * V20 rich-text replacement:
+   *
+   * We use the editor's paste/input handling instead of changing
+   * its DOM and instead of chrome.debugger.
+   *
+   * React/Draft.js-style editors commonly process paste events as
+   * real editor operations, updating their own internal state.
+   *
+   * No execCommand(), no deleteContents(), no insertNode(), and
+   * no clipboard/ Ctrl+V workflow.
+   */
   function replaceRichText(text) {
-    if (!savedEditable || !savedRange) {
-      throw new Error(
-        "Rich-text selection was lost."
-      );
-    }
+    const selection = restoreRichSelection();
 
-    restoreOriginalSelection();
-
-    const selection =
-      window.getSelection();
-
-    const current =
-      selection?.toString() || "";
-
-    if (
-      savedText &&
-      current !== savedText
-    ) {
+    const current = selection.toString();
+    if (savedText && current !== savedText) {
       throw new Error(
         "The selected text changed while GPT was working. Nothing was replaced."
       );
     }
 
-    /*
-     * IMPORTANT:
-     *
-     * Do not use:
-     *   range.deleteContents()
-     *   range.insertNode()
-     *   innerHTML
-     *   textContent
-     *
-     * Those operations can leave React/Lexical/ProseMirror-style
-     * editors out of sync with their internal state.
-     *
-     * execCommand("insertText") asks the browser to perform the
-     * editing operation against the current selection and lets the
-     * editor receive its normal input event.
-     */
-    let ok = false;
-
+    let dataTransfer;
     try {
-      ok =
-        document.execCommand(
-          "insertText",
-          false,
-          text
-        );
-    } catch (error) {
-      console.error(
-        "GPT Text Corrector insertText failed:",
-        error
+      dataTransfer = new DataTransfer();
+      dataTransfer.setData("text/plain", text);
+      dataTransfer.setData("text/html", text.replace(/\n/g, "<br>"));
+    } catch {
+      throw new Error(
+        "This browser does not support the safe editor replacement method."
       );
     }
 
-    if (!ok) {
+    let event;
+    try {
+      event = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dataTransfer
+      });
+    } catch {
+      event = new Event("paste", {
+        bubbles: true,
+        cancelable: true
+      });
+      Object.defineProperty(event, "clipboardData", {
+        value: dataTransfer
+      });
+    }
+
+    const handled = !savedEditable.dispatchEvent(event);
+
+    /*
+     * A paste handler normally prevents the browser default and
+     * updates the editor's own state. We intentionally do not
+     * touch the DOM if the site doesn't handle the event.
+     */
+    const after = window.getSelection()?.toString() || "";
+
+    if (after === current && !handled) {
+      clearSelectionState();
       throw new Error(
-        "This rich-text editor rejected the replacement."
+        "This rich-text editor did not accept the safe replacement."
       );
     }
 
     clearSelectionState();
   }
-
 
   async function replaceSelection(text) {
-    if (!text) {
-      throw new Error(
-        "GPT returned empty text."
-      );
-    }
+    if (!text) throw new Error("GPT returned empty text.");
 
     if (savedType === "input") {
       replaceInput(text);
@@ -660,246 +296,111 @@
       return;
     }
 
-    throw new Error(
-      "Unsupported editor."
-    );
+    throw new Error("Unsupported editor.");
   }
-
-
-  // ============================================================
-  // TOAST
-  // ============================================================
 
   function showToast(message) {
-    let toast =
-      document.getElementById(
-        "__gpttc_toast"
-      );
+    let toast = document.getElementById("__gpttc_toast");
 
     if (!toast) {
-      toast =
-        document.createElement(
-          "div"
-        );
+      toast = document.createElement("div");
+      toast.id = "__gpttc_toast";
 
-      toast.id =
-        "__gpttc_toast";
+      Object.assign(toast.style, {
+        position: "fixed",
+        right: "18px",
+        bottom: "18px",
+        zIndex: "2147483647",
+        background: "#111",
+        color: "#fff",
+        padding: "9px 13px",
+        borderRadius: "8px",
+        font: "13px Arial,sans-serif",
+        boxShadow: "0 4px 16px rgba(0,0,0,.25)",
+        pointerEvents: "none"
+      });
 
-      Object.assign(
-        toast.style,
-        {
-          position: "fixed",
-          right: "18px",
-          bottom: "18px",
-          zIndex:
-            "2147483647",
-          background:
-            "#111",
-          color:
-            "#fff",
-          padding:
-            "9px 13px",
-          borderRadius:
-            "8px",
-          font:
-            "13px Arial,sans-serif",
-          boxShadow:
-            "0 4px 16px rgba(0,0,0,.25)",
-          pointerEvents:
-            "none"
-        }
-      );
-
-      document.documentElement
-        .appendChild(toast);
+      document.documentElement.appendChild(toast);
     }
 
-    toast.textContent =
-      message;
-
-    clearTimeout(
-      toast._timer
-    );
-
-    toast._timer =
-      setTimeout(
-        () => {
-          toast.remove();
-        },
-        2200
-      );
+    toast.textContent = message;
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.remove(), 2200);
   }
 
-
-  // ============================================================
-  // ACTION MENU
-  // ============================================================
-
   function showActions() {
-    const old =
-      document.getElementById(
-        "__gpttc_actions"
-      );
+    const old = document.getElementById("__gpttc_actions");
+    if (old) old.remove();
 
-    if (old) {
-      old.remove();
-    }
+    const box = document.createElement("div");
+    box.id = "__gpttc_actions";
 
-    const box =
-      document.createElement(
-        "div"
-      );
-
-    box.id =
-      "__gpttc_actions";
-
-    Object.assign(
-      box.style,
-      {
-        position: "fixed",
-        top: "70px",
-        right: "18px",
-        zIndex:
-          "2147483647",
-        width: "280px",
-        background:
-          "#fff",
-        border:
-          "1px solid #ddd",
-        borderRadius:
-          "12px",
-        padding:
-          "12px",
-        boxShadow:
-          "0 10px 35px rgba(0,0,0,.18)",
-        font:
-          "14px system-ui,sans-serif"
-      }
-    );
+    Object.assign(box.style, {
+      position: "fixed",
+      top: "70px",
+      right: "18px",
+      zIndex: "2147483647",
+      width: "280px",
+      background: "#fff",
+      border: "1px solid #ddd",
+      borderRadius: "12px",
+      padding: "12px",
+      boxShadow: "0 10px 35px rgba(0,0,0,.18)",
+      font: "14px system-ui,sans-serif"
+    });
 
     box.innerHTML = `
       <b>✨ GPT Text Corrector</b>
-
-      <div
-        style="
-          color:#666;
-          font-size:12px;
-          margin:5px 0 10px
-        "
-      >
+      <div style="color:#666;font-size:12px;margin:5px 0 10px">
         Choose an action for your selected text
       </div>
     `;
 
-
-    const actions = [
+    [
       ["correct", "✨ Correct"],
       ["professional", "💼 Professional"],
       ["casual", "😊 Casual"],
       ["shorten", "✂️ Shorten"],
       ["improve", "🧠 Improve"],
       ["translate", "🌍 Translate"]
-    ];
+    ].forEach(([action, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
 
+      Object.assign(button.style, {
+        display: "block",
+        width: "100%",
+        padding: "9px",
+        margin: "5px 0",
+        border: "1px solid #eee",
+        borderRadius: "8px",
+        background: "#fafafa",
+        textAlign: "left",
+        cursor: "pointer"
+      });
 
-    actions.forEach(
-      ([action, label]) => {
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        box.remove();
+        await doAction(action);
+      });
 
-        const button =
-          document.createElement(
-            "button"
-          );
+      box.appendChild(button);
+    });
 
-        button.type =
-          "button";
+    document.documentElement.appendChild(box);
 
-        button.textContent =
-          label;
+    setTimeout(() => {
+      const close = (event) => {
+        if (!box.contains(event.target)) {
+          box.remove();
+          document.removeEventListener("mousedown", close, true);
+        }
+      };
 
-        Object.assign(
-          button.style,
-          {
-            display:
-              "block",
-            width:
-              "100%",
-            padding:
-              "9px",
-            margin:
-              "5px 0",
-            border:
-              "1px solid #eee",
-            borderRadius:
-              "8px",
-            background:
-              "#fafafa",
-            textAlign:
-              "left",
-            cursor:
-              "pointer"
-          }
-        );
-
-
-        button.addEventListener(
-          "click",
-          async (event) => {
-
-            event.preventDefault();
-
-            event.stopPropagation();
-
-            box.remove();
-
-            await doAction(
-              action
-            );
-          }
-        );
-
-
-        box.appendChild(
-          button
-        );
-      }
-    );
-
-
-    document.documentElement
-      .appendChild(box);
-
-
-    setTimeout(
-      () => {
-
-        const close =
-          (event) => {
-
-            if (
-              !box.contains(
-                event.target
-              )
-            ) {
-              box.remove();
-
-              document.removeEventListener(
-                "mousedown",
-                close,
-                true
-              );
-            }
-          };
-
-
-        document.addEventListener(
-          "mousedown",
-          close,
-          true
-        );
-
-      },
-      0
-    );
+      document.addEventListener("mousedown", close, true);
+    }, 0);
   }
-
 })();
