@@ -558,26 +558,45 @@
   // ============================================================
 
   function replaceRichText(text) {
-    if (!savedEditable) {
-      throw new Error(
-        "Rich-text editor not found."
-      );
-    }
+  if (!savedEditable) {
+    throw new Error("Rich-text editor not found.");
+  }
 
-    if (!savedRange) {
-      throw new Error(
-        "Original selection was lost."
-      );
-    }
+  if (!savedRange) {
+    throw new Error("Original selection was lost.");
+  }
 
+  /*
+   * IMPORTANT:
+   * Do NOT use execCommand().
+   * Do NOT modify the DOM.
+   *
+   * X / LinkedIn / Discord maintain their own editor state.
+   * Direct DOM editing can make Backspace, Delete and Ctrl+X
+   * stop working.
+   */
 
-    /*
-     * Restore the selection.
-     */
+  const selection = window.getSelection();
 
-    const selection =
-      restoreRichSelection();
+  if (!selection) {
+    throw new Error("Browser selection is unavailable.");
+  }
 
+  /*
+   * Restore focus only.
+   * Do not modify the selected text.
+   */
+
+  try {
+    savedEditable.focus();
+  } catch {}
+
+  clearSelectionState();
+
+  throw new Error(
+    "Rich-text replacement is temporarily disabled. Your original text is unchanged."
+  );
+}
 
     /*
      * Verify that the selected text still exists.
