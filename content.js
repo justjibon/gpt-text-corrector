@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V16__) return;
-  window.__GPT_TEXT_CORRECTOR_V16__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V17__) return;
+  window.__GPT_TEXT_CORRECTOR_V17__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
@@ -318,12 +318,12 @@
 
 
             try {
-              await replaceSelection(
+              await copyCorrectedText(
                 response.text
               );
 
               showToast(
-                "Done ✓"
+                "Copied ✓ Press Ctrl+V to replace"
               );
 
               busy = false;
@@ -457,130 +457,144 @@
 
 
   // ============================================================
-  // RICH-TEXT REPLACEMENT
+  // COPY GPT RESULT WITHOUT TOUCHING THE EDITOR
   //
-  // We do not modify the DOM and we do not use execCommand().
-  // The background service worker uses Chrome's DevTools Protocol
-  // Input domain to perform Backspace + text insertion on the
-  // focused editor. That lets X / LinkedIn / Discord receive their
-  // normal keyboard/input pipeline.
+  // We intentionally do NOT modify X / LinkedIn / Discord DOM.
+  // The corrected text is copied to the system clipboard and the
+  // user's original selection remains selected, so Ctrl+V replaces
+  // it through the site's own native editing pipeline.
   // ============================================================
 
-  async function replaceRichText(text) {
-    if (!savedEditable) {
-      throw new Error(
-        "Rich-text editor not found."
-      );
-    }
-
-    if (!savedRange) {
-      throw new Error(
-        "Original selection was lost."
-      );
-    }
-
-    const selection =
-      window.getSelection();
-
-    if (!selection) {
-      throw new Error(
-        "Browser selection is unavailable."
-      );
-    }
-
-    // Restore the exact selection that was sent to GPT.
-    selection.removeAllRanges();
-    selection.addRange(
-      savedRange.cloneRange()
-    );
-
-    const currentText =
-      selection.toString();
-
-    // Never replace a different selection.
-    if (
-      savedText &&
-      currentText !== savedText
-    ) {
-      clearSelectionState();
-
-      throw new Error(
-        "The selected text changed while GPT was working. Nothing was replaced."
-      );
-    }
-
-    try {
-      savedEditable.focus();
-    } catch {}
-
-    // Focus can collapse the selection on some editors, so restore it once more.
-    selection.removeAllRanges();
-    selection.addRange(
-      savedRange.cloneRange()
-    );
-
-    const result =
-      await new Promise((resolve) => {
-        chrome.runtime.sendMessage(
-          {
-            type: "GPT_NATIVE_REPLACE",
-            text
-          },
-          (response) => {
-            if (chrome.runtime.lastError) {
-              resolve({
-                ok: false,
-                error:
-                  chrome.runtime.lastError.message
-              });
-              return;
-            }
-
-            resolve(
-              response || {
-                ok: false,
-                error: "No response from background service worker."
-              }
-            );
-          }
-        );
-      });
-
-    clearSelectionState();
-
-    if (!result?.ok) {
-      throw new Error(
-        result?.error ||
-        "Could not replace the rich-text selection."
-      );
-    }
-  }
-
-
-  // ============================================================
-  // REPLACE SELECTION
-  // ============================================================
-
-  async function replaceSelection(text) {
+  async function copyCorrectedText(text) {
     if (!savedEditable) {
       throw new Error(
         "Editor not found."
       );
     }
 
+    if (!text) {
+      throw new Error(
+        "GPT returned empty text."
+      );
+    }
+
+    // Restore the exact original selection before copying.
+    if (savedType === "rich" && savedRange) {
+      const selection = window.getSelection();
+
+      if (!selection) {
+        throw new Error(
+          "Browser selection is unavailable."
+        );
+      }
+
+      try {
+        savedEditable.focus();
+      } catch {}
+
+      selection.removeAllRanges();
+      selection.addRange(
+        savedRange.cloneRange()
+      );
+
+      const currentText =
+        selection.toString();
+
+      if (
+        savedText &&
+        currentText !== savedText
+      ) {
+        throw new Error(
+          "The selected text changed while GPT was working. Nothing was copied."
+        );
+      }
+    }
+
     if (savedType === "input") {
-      replaceInput(text);
-      return;
+      savedEditable.focus();
+      savedEditable.setSelectionRange(
+        savedStart,
+        savedEnd
+      );
     }
 
-    if (savedType === "rich") {
-      await replaceRichText(text);
+    // Preferred modern clipboard API.
+    try {
+      await navigator.clipboard.writeText(text);
       return;
+    } catch (clipboardError) {
+      console.warn(
+        "GPT Text Corrector clipboard API failed; using fallback.",
+        clipboardError
+      );
     }
 
-    throw new Error(
-      "Unsupported editor."
+    // Fallback for pages that block navigator.clipboard.
+    // This temporary textarea is never inserted into the target editor.
+    const helper = document.createElement("textarea");
+
+    helper.value = text;
+
+    Object.assign(
+      helper.style,
+      {
+        position: "fixed",
+        left: "-10000px",
+        top: "-10000px",
+        width: "1px",
+        height: "1px",
+        opacity: "0",
+        pointerEvents: "none"
+      }
     );
+
+    document.documentElement.appendChild(helper);
+
+    try {
+      helper.focus();
+      helper.select();
+
+      const copied =
+        document.execCommand("copy");
+
+      if (!copied) {
+        throw new Error(
+          "Clipboard access was denied by this page."
+        );
+      }
+    } finally {
+      helper.remove();
+
+      // Restore the user's original editor selection.
+      if (savedType === "rich" && savedRange) {
+        try {
+          savedEditable.focus();
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(
+            savedRange.cloneRange()
+          );
+        } catch {}
+      } else if (savedType === "input") {
+        try {
+          savedEditable.focus();
+          savedEditable.setSelectionRange(
+            savedStart,
+            savedEnd
+          );
+        } catch {}
+      }
+    }
+  }
+
+
+  // ============================================================
+  // REPLACE SELECTION
+
+  // ============================================================
+
+  async function replaceSelection(text) {
+    await copyCorrectedText(text);
   }
 
 
