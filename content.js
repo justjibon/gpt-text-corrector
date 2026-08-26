@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V9__) return;
-  window.__GPT_TEXT_CORRECTOR_V9__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V10__) return;
+  window.__GPT_TEXT_CORRECTOR_V10__ = true;
 
   let lastEditable = null;
   let lastInputStart = 0;
@@ -9,46 +9,88 @@
   let lastSelectedText = "";
   let busy = false;
 
-  const isInput = (e) =>
-    !!e &&
-    (
-      e.tagName === "TEXTAREA" ||
-      (
-        e.tagName === "INPUT" &&
-        ["text", "search", "email", "url"].includes(
-          (e.type || "").toLowerCase()
-        )
-      )
-    );
+  /*
+   * ------------------------------------------------------------
+   * INPUT / TEXTAREA DETECTION
+   * ------------------------------------------------------------
+   */
 
-  function findEditable(n) {
-    if (!n) return null;
+  const isInput = (el) => {
+    if (!el) return false;
 
-    if (n.nodeType === Node.TEXT_NODE) {
-      n = n.parentElement;
+    if (el.tagName === "TEXTAREA") {
+      return true;
     }
 
-    if (!n) return null;
+    if (el.tagName === "INPUT") {
+      return [
+        "text",
+        "search",
+        "email",
+        "url"
+      ].includes((el.type || "").toLowerCase());
+    }
+
+    return false;
+  };
+
+  /*
+   * ------------------------------------------------------------
+   * FIND EDITABLE ELEMENT
+   * ------------------------------------------------------------
+   */
+
+  function findEditable(node) {
+    if (!node) return null;
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      node = node.parentElement;
+    }
+
+    if (!node) return null;
 
     if (
-      isInput(n) ||
-      n.isContentEditable ||
-      n.getAttribute?.("role") === "textbox"
+      isInput(node) ||
+      node.isContentEditable ||
+      node.getAttribute?.("contenteditable") === "true" ||
+      node.getAttribute?.("role") === "textbox"
     ) {
-      return n;
+      return node;
     }
 
     return (
-      n.closest?.(
-        'textarea,input[type="text"],input[type="search"],input[type="email"],input[type="url"],[contenteditable="true"],[role="textbox"]'
+      node.closest?.(
+        [
+          "textarea",
+          'input[type="text"]',
+          'input[type="search"]',
+          'input[type="email"]',
+          'input[type="url"]',
+          '[contenteditable="true"]',
+          '[contenteditable=""]',
+          '[role="textbox"]'
+        ].join(",")
       ) || null
     );
   }
 
-  function capture() {
+  /*
+   * ------------------------------------------------------------
+   * CAPTURE SELECTION
+   *
+   * IMPORTANT:
+   * Once GPT processing starts, we DO NOT call capture()
+   * again. This prevents the website from replacing our saved
+   * selection while the GPT request is running.
+   * ------------------------------------------------------------
+   */
+
+  function captureSelection() {
     const active = findEditable(document.activeElement);
 
-    // INPUT / TEXTAREA
+    /*
+     * INPUT / TEXTAREA
+     */
     if (active && isInput(active)) {
       const start = active.selectionStart ?? 0;
       const end = active.selectionEnd ?? 0;
@@ -59,73 +101,138 @@
         lastInputEnd = end;
         lastSelectedText = active.value.substring(start, end);
         lastRange = null;
-        return;
+
+        return true;
       }
     }
 
-    // CONTENTEDITABLE / RICH TEXT
-    const sel = window.getSelection();
+    /*
+     * CONTENTEDITABLE / RICH TEXT
+     */
+    const selection = window.getSelection();
 
-    if (sel && sel.rangeCount && !sel.isCollapsed) {
-      const range = sel.getRangeAt(0);
-      const ed = findEditable(range.commonAncestorContainer);
+    if (
+      selection &&
+      selection.rangeCount > 0 &&
+      !selection.isCollapsed
+    ) {
+      const range = selection.getRangeAt(0);
+      const editable = findEditable(
+        range.commonAncestorContainer
+      );
 
-      if (ed) {
-        lastEditable = ed;
+      if (editable) {
+        lastEditable = editable;
         lastRange = range.cloneRange();
-        lastSelectedText = lastRange.toString();
+        lastSelectedText = range.toString();
+
+        return true;
       }
     }
+
+    return false;
   }
+
+  /*
+   * Keep selection information updated while the user is
+   * selecting text.
+   *
+   * During GPT processing we intentionally stop updating it.
+   */
 
   document.addEventListener(
     "selectionchange",
-    () => setTimeout(capture, 0),
+    () => {
+      if (!busy) {
+        captureSelection();
+      }
+    },
     true
   );
 
   document.addEventListener(
     "mouseup",
-    () => setTimeout(capture, 0),
+    () => {
+      if (!busy) {
+        setTimeout(captureSelection, 0);
+      }
+    },
     true
   );
 
   document.addEventListener(
     "keyup",
-    () => setTimeout(capture, 0),
+    () => {
+      if (!busy) {
+        setTimeout(captureSelection, 0);
+      }
+    },
     true
   );
 
-  chrome.runtime.onMessage.addListener((m, s, send) => {
-    if (m?.type === "GPT_GET_SELECTION") {
-      capture();
+  /*
+   * ------------------------------------------------------------
+   * MESSAGE HANDLING
+   * ------------------------------------------------------------
+   */
 
-      send({
-        ok: true,
-        hasSelection: !!lastSelectedText.trim()
-      });
+  chrome.runtime.onMessage.addListener(
+    (message, sender, sendResponse) => {
 
-      return;
+      /*
+       * Get current selection
+       */
+      if (message?.type === "GPT_GET_SELECTION") {
+        captureSelection();
+
+        sendResponse({
+          ok: true,
+          hasSelection: !!lastSelectedText.trim()
+        });
+
+        return;
+      }
+
+      /*
+       * Open action menu
+       */
+      if (message?.type === "GPT_OPEN_ACTIONS") {
+        showActions();
+
+        sendResponse({
+          ok: true
+        });
+
+        return;
+      }
+
+      /*
+       * Execute GPT action
+       */
+      if (message?.type === "GPT_DO_ACTION") {
+        /*
+         * Capture BEFORE starting the request.
+         *
+         * Do NOT call captureSelection() again after the
+         * GPT request begins.
+         */
+        captureSelection();
+
+        doAction(message.action || "correct")
+          .then((result) => {
+            sendResponse(result);
+          });
+
+        return true;
+      }
     }
+  );
 
-    if (m?.type === "GPT_OPEN_ACTIONS") {
-      showActions();
-
-      send({
-        ok: true
-      });
-
-      return;
-    }
-
-    if (m?.type === "GPT_DO_ACTION") {
-      capture();
-
-      doAction(m.action || "correct").then((r) => send(r));
-
-      return true;
-    }
-  });
+  /*
+   * ------------------------------------------------------------
+   * GPT ACTION
+   * ------------------------------------------------------------
+   */
 
   async function doAction(action) {
     if (busy) {
@@ -135,7 +242,12 @@
       };
     }
 
-    capture();
+    /*
+     * Make absolutely sure we have a selection before locking it.
+     */
+    if (!lastSelectedText.trim()) {
+      captureSelection();
+    }
 
     if (!lastSelectedText.trim()) {
       showToast("Select some text first.");
@@ -146,19 +258,25 @@
       };
     }
 
+    /*
+     * Freeze selection from this point forward.
+     */
     busy = true;
+
     showToast("Working…");
 
-    const original = lastSelectedText;
+    const originalText = lastSelectedText;
 
     return new Promise((resolve) => {
+
       chrome.runtime.sendMessage(
         {
           type: "GPT_CORRECT",
-          text: original,
+          text: originalText,
           action
         },
-        (resp) => {
+        (response) => {
+
           if (chrome.runtime.lastError) {
             busy = false;
 
@@ -172,13 +290,15 @@
             return;
           }
 
-          if (!resp?.ok) {
+          if (!response?.ok) {
             busy = false;
 
-            showToast(resp?.error || "GPT request failed.");
+            showToast(
+              response?.error || "GPT request failed."
+            );
 
             resolve(
-              resp || {
+              response || {
                 ok: false
               }
             );
@@ -187,7 +307,7 @@
           }
 
           try {
-            replace(resp.text);
+            replaceSelectedText(response.text);
 
             showToast("Done ✓");
 
@@ -196,16 +316,25 @@
             resolve({
               ok: true
             });
-          } catch (e) {
+
+          } catch (error) {
             busy = false;
 
+            console.error(
+              "GPT Text Corrector replacement error:",
+              error
+            );
+
             showToast(
-              e?.message || "Could not replace the selection."
+              error?.message ||
+              "Could not replace the selection."
             );
 
             resolve({
               ok: false,
-              error: e?.message || "Replacement failed."
+              error:
+                error?.message ||
+                "Could not replace the selection."
             });
           }
         }
@@ -213,15 +342,21 @@
     });
   }
 
-  function replace(text) {
+  /*
+   * ------------------------------------------------------------
+   * REPLACE SELECTED TEXT
+   * ------------------------------------------------------------
+   */
+
+  function replaceSelectedText(text) {
     if (!lastEditable) {
       throw new Error("Editor not found.");
     }
 
     /*
-     * ============================================================
+     * ==========================================================
      * INPUT / TEXTAREA
-     * ============================================================
+     * ==========================================================
      */
 
     if (isInput(lastEditable)) {
@@ -229,17 +364,23 @@
 
       input.focus();
 
+      /*
+       * Restore original selection.
+       */
       input.setSelectionRange(
         lastInputStart,
         lastInputEnd
       );
 
       /*
-       * setRangeText() performs the replacement through the
-       * native input editing API instead of changing .value
-       * manually.
+       * Native replacement.
        *
-       * "end" places the caret after the corrected text.
+       * This is preferable to:
+       *
+       * input.value = ...
+       *
+       * because setRangeText() integrates with the native
+       * text-control editing behavior.
        */
       input.setRangeText(
         text,
@@ -259,7 +400,7 @@
             data: text
           })
         );
-      } catch {
+      } catch (error) {
         input.dispatchEvent(
           new Event("input", {
             bubbles: true
@@ -267,15 +408,15 @@
         );
       }
 
-      clear();
+      clearSelectionState();
 
       return;
     }
 
     /*
-     * ============================================================
+     * ==========================================================
      * CONTENTEDITABLE / RICH TEXT
-     * ============================================================
+     * ==========================================================
      */
 
     if (!lastRange) {
@@ -284,83 +425,116 @@
 
     const editable = lastEditable;
 
-    editable.focus?.();
+    /*
+     * Focus the original editor.
+     */
+    if (typeof editable.focus === "function") {
+      editable.focus();
+    }
 
     const selection = window.getSelection();
 
     if (!selection) {
-      throw new Error("Selection is unavailable.");
+      throw new Error("Browser selection is unavailable.");
     }
 
     /*
-     * Restore the exact selection that the user originally made.
+     * Restore the exact Range captured before GPT processing.
      */
     selection.removeAllRanges();
 
-    const range = lastRange.cloneRange();
+    const restoredRange = lastRange.cloneRange();
 
-    selection.addRange(range);
+    selection.addRange(restoredRange);
 
     /*
-     * IMPORTANT:
+     * ----------------------------------------------------------
+     * NATIVE EDITING
+     * ----------------------------------------------------------
      *
-     * Do NOT use:
+     * This is the critical part.
+     *
+     * We intentionally DO NOT do:
      *
      * range.deleteContents()
      * range.insertNode(...)
      *
-     * as a fallback.
+     * Those operations directly modify the DOM and can cause
+     * React/contenteditable editors to lose their internal
+     * editing state.
      *
-     * Those operations directly modify the DOM and can break the
-     * internal state of editors such as React, ProseMirror,
-     * TipTap, Lexical, etc.
-     *
-     * insertText is much safer because it goes through the
-     * browser's editing mechanism.
+     * execCommand("insertText") asks the browser/editor to
+     * perform an actual text-editing operation.
      */
-    let inserted = false;
+
+    let success = false;
 
     try {
-      inserted = document.execCommand(
+      success = document.execCommand(
         "insertText",
         false,
         text
       );
-    } catch (e) {
-      inserted = false;
+    } catch (error) {
+      console.warn(
+        "execCommand insertText failed:",
+        error
+      );
+      success = false;
     }
 
     /*
-     * If the browser/editor refuses execCommand(), do NOT perform
-     * direct DOM manipulation. It is better to report failure than
-     * corrupt the editor's internal state.
+     * NEVER fall back to direct DOM manipulation.
+     *
+     * If the editor refuses the native operation, report an
+     * error rather than corrupting the editor.
      */
-    if (!inserted) {
+    if (!success) {
       throw new Error(
-        "This editor does not support safe text replacement."
+        "This editor does not allow safe text replacement."
       );
     }
 
-    clear();
+    /*
+     * The browser should have moved the caret to the end of
+     * the inserted text.
+     *
+     * Do not manually modify the DOM or create another Range.
+     */
+
+    clearSelectionState();
   }
 
-  function clear() {
-    lastSelectedText = "";
-    lastRange = null;
+  /*
+   * ------------------------------------------------------------
+   * CLEAR SAVED SELECTION
+   * ------------------------------------------------------------
+   */
+
+  function clearSelectionState() {
+    lastEditable = null;
     lastInputStart = 0;
     lastInputEnd = 0;
-    lastEditable = null;
+    lastRange = null;
+    lastSelectedText = "";
   }
 
-  function showToast(msg) {
-    let t = document.getElementById("__gpttc_toast");
+  /*
+   * ------------------------------------------------------------
+   * TOAST
+   * ------------------------------------------------------------
+   */
 
-    if (!t) {
-      t = document.createElement("div");
+  function showToast(message) {
+    let toast =
+      document.getElementById("__gpttc_toast");
 
-      t.id = "__gpttc_toast";
+    if (!toast) {
+      toast = document.createElement("div");
 
-      Object.assign(t.style, {
+      toast.id = "__gpttc_toast";
+
+      Object.assign(toast.style, {
         position: "fixed",
         right: "18px",
         bottom: "18px",
@@ -370,25 +544,36 @@
         padding: "9px 13px",
         borderRadius: "8px",
         font: "13px Arial,sans-serif",
-        boxShadow: "0 4px 16px rgba(0,0,0,.25)"
+        boxShadow:
+          "0 4px 16px rgba(0,0,0,.25)"
       });
 
-      document.documentElement.appendChild(t);
+      document.documentElement.appendChild(toast);
     }
 
-    t.textContent = msg;
+    toast.textContent = message;
 
-    clearTimeout(t._timer);
+    clearTimeout(toast._timer);
 
-    t._timer = setTimeout(() => {
-      t.remove();
+    toast._timer = setTimeout(() => {
+      toast.remove();
     }, 2200);
   }
 
-  function showActions() {
-    capture();
+  /*
+   * ------------------------------------------------------------
+   * ACTION MENU
+   * ------------------------------------------------------------
+   */
 
-    const old = document.getElementById("__gpttc_actions");
+  function showActions() {
+    /*
+     * Capture the user's selection BEFORE creating the menu.
+     */
+    captureSelection();
+
+    const old =
+      document.getElementById("__gpttc_actions");
 
     if (old) {
       old.remove();
@@ -408,13 +593,21 @@
       border: "1px solid #ddd",
       borderRadius: "12px",
       padding: "12px",
-      boxShadow: "0 10px 35px rgba(0,0,0,.18)",
+      boxShadow:
+        "0 10px 35px rgba(0,0,0,.18)",
       font: "14px system-ui,sans-serif"
     });
 
     box.innerHTML = `
       <b>✨ GPT Text Corrector</b>
-      <div style="color:#666;font-size:12px;margin:5px 0 10px">
+
+      <div
+        style="
+          color:#666;
+          font-size:12px;
+          margin:5px 0 10px
+        "
+      >
         Choose an action for your selected text
       </div>
     `;
@@ -426,12 +619,14 @@
       ["shorten", "✂️ Shorten"],
       ["improve", "🧠 Improve"],
       ["translate", "🌍 Translate"]
-    ].forEach(([a, label]) => {
-      const b = document.createElement("button");
+    ].forEach(([action, label]) => {
 
-      b.textContent = label;
+      const button =
+        document.createElement("button");
 
-      Object.assign(b.style, {
+      button.textContent = label;
+
+      Object.assign(button.style, {
         display: "block",
         width: "100%",
         padding: "9px",
@@ -443,33 +638,55 @@
         cursor: "pointer"
       });
 
-      b.onclick = async () => {
-        box.remove();
+      button.addEventListener(
+        "click",
+        async (event) => {
 
-        await doAction(a);
-      };
+          event.preventDefault();
+          event.stopPropagation();
 
-      box.appendChild(b);
+          /*
+           * Remove menu first.
+           *
+           * IMPORTANT:
+           * We DO NOT call captureSelection() here.
+           *
+           * The selection captured before opening this menu
+           * must remain frozen.
+           */
+          box.remove();
+
+          await doAction(action);
+        }
+      );
+
+      box.appendChild(button);
     });
 
     document.documentElement.appendChild(box);
 
+    /*
+     * Close menu when clicking outside.
+     *
+     * Do not alter the saved selection.
+     */
     setTimeout(() => {
+      const closeMenu = (event) => {
+        if (!box.contains(event.target)) {
+          box.remove();
+
+          document.removeEventListener(
+            "mousedown",
+            closeMenu,
+            true
+          );
+        }
+      };
+
       document.addEventListener(
         "mousedown",
-        function close(e) {
-          if (!box.contains(e.target)) {
-            box.remove();
-
-            document.removeEventListener(
-              "mousedown",
-              close
-            );
-          }
-        },
-        {
-          once: true
-        }
+        closeMenu,
+        true
       );
     }, 0);
   }
