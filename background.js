@@ -390,9 +390,6 @@ async function nativeReplace(tabId, text) {
 
     attached = true;
 
-    // Small pause so the page/editor is ready after the attach.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
     // Delete the currently selected text using the browser's
     // native Backspace editing path. The content script restores
     // the original selection before requesting this operation.
@@ -420,16 +417,12 @@ async function nativeReplace(tabId, text) {
       }
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
     // Insert the GPT result through the browser input pipeline.
     await chrome.debugger.sendCommand(
       { tabId },
       "Input.insertText",
       { text }
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
   } finally {
     if (attached) {
