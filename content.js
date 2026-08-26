@@ -1,15 +1,20 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V11__) return;
-  window.__GPT_TEXT_CORRECTOR_V11__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V12__) return;
+  window.__GPT_TEXT_CORRECTOR_V12__ = true;
 
   let savedEditable = null;
-  let savedInputStart = 0;
-  let savedInputEnd = 0;
-  let savedRange = null;
+  let savedStart = 0;
+  let savedEnd = 0;
   let savedText = "";
   let busy = false;
 
-  const isTextInput = (el) => {
+  /*
+   * ------------------------------------------------------------
+   * INPUT / TEXTAREA
+   * ------------------------------------------------------------
+   */
+
+  function isInput(el) {
     if (!el) return false;
 
     if (el.tagName === "TEXTAREA") {
@@ -22,11 +27,20 @@
         "search",
         "email",
         "url"
-      ].includes((el.type || "").toLowerCase());
+      ].includes(
+        (el.type || "").toLowerCase()
+      );
     }
 
     return false;
-  };
+  }
+
+
+  /*
+   * ------------------------------------------------------------
+   * FIND EDITABLE
+   * ------------------------------------------------------------
+   */
 
   function findEditable(node) {
     if (!node) return null;
@@ -37,175 +51,222 @@
 
     if (!node) return null;
 
-    if (
-      isTextInput(node) ||
-      node.isContentEditable ||
-      node.getAttribute?.("contenteditable") === "true" ||
-      node.getAttribute?.("role") === "textbox"
-    ) {
+    if (isInput(node)) {
       return node;
     }
 
-    return (
-      node.closest?.(
-        [
-          "textarea",
-          'input[type="text"]',
-          'input[type="search"]',
-          'input[type="email"]',
-          'input[type="url"]',
-          '[contenteditable="true"]',
-          '[contenteditable=""]',
-          '[role="textbox"]'
-        ].join(",")
-      ) || null
+    if (node.isContentEditable) {
+      return node;
+    }
+
+    const editable = node.closest?.(
+      [
+        "textarea",
+        'input[type="text"]',
+        'input[type="search"]',
+        'input[type="email"]',
+        'input[type="url"]',
+        '[contenteditable="true"]'
+      ].join(",")
     );
+
+    return editable || null;
   }
 
+
   /*
-   * ============================================================
-   * SAVE CURRENT SELECTION
-   * ============================================================
+   * ------------------------------------------------------------
+   * GET CURRENT SELECTION
+   *
+   * IMPORTANT:
+   *
+   * There are NO selectionchange / keyup / mouseup listeners.
+   *
+   * The extension only looks at the page when explicitly asked.
+   * ------------------------------------------------------------
    */
 
-  function saveCurrentSelection() {
-    const active = findEditable(document.activeElement);
+  function getSelectionNow() {
+    const active = findEditable(
+      document.activeElement
+    );
 
     /*
-     * ----------------------------
-     * INPUT / TEXTAREA
-     * ----------------------------
+     * Normal input / textarea
      */
 
-    if (active && isTextInput(active)) {
-      const start = active.selectionStart ?? 0;
-      const end = active.selectionEnd ?? 0;
+    if (active && isInput(active)) {
+      const start =
+        active.selectionStart ?? 0;
+
+      const end =
+        active.selectionEnd ?? 0;
 
       if (start !== end) {
-        savedEditable = active;
-        savedInputStart = start;
-        savedInputEnd = end;
-        savedText = active.value.substring(start, end);
-        savedRange = null;
-
-        return true;
+        return {
+          type: "input",
+          editable: active,
+          start,
+          end,
+          text: active.value.substring(
+            start,
+            end
+          )
+        };
       }
     }
 
+
     /*
-     * ----------------------------
-     * CONTENTEDITABLE
-     * ----------------------------
+     * Rich text
      */
 
-    const selection = window.getSelection();
+    const selection =
+      window.getSelection();
 
     if (
       selection &&
       selection.rangeCount > 0 &&
       !selection.isCollapsed
     ) {
-      const range = selection.getRangeAt(0);
+      const range =
+        selection.getRangeAt(0);
 
-      const editable = findEditable(
-        range.commonAncestorContainer
-      );
+      const editable =
+        findEditable(
+          range.commonAncestorContainer
+        );
 
-      if (editable) {
-        savedEditable = editable;
-        savedRange = range.cloneRange();
-        savedText = range.toString();
+      const text =
+        selection.toString();
 
-        return !!savedText.trim();
+      if (
+        editable &&
+        text.trim()
+      ) {
+        return {
+          type: "rich",
+          editable,
+          text
+        };
       }
+    }
+
+    return null;
+  }
+
+
+  /*
+   * ------------------------------------------------------------
+   * SAVE SELECTION
+   * ------------------------------------------------------------
+   */
+
+  function saveSelection() {
+    const current =
+      getSelectionNow();
+
+    if (!current) {
+      return false;
+    }
+
+    /*
+     * INPUT / TEXTAREA
+     */
+
+    if (current.type === "input") {
+      savedEditable =
+        current.editable;
+
+      savedStart =
+        current.start;
+
+      savedEnd =
+        current.end;
+
+      savedText =
+        current.text;
+
+      return true;
+    }
+
+    /*
+     * RICH TEXT
+     *
+     * We intentionally do NOT save a DOM Range.
+     *
+     * A Range can become invalid or cause framework editors
+     * such as X/LinkedIn/Discord to lose their internal state.
+     *
+     * We only remember the selected text.
+     */
+
+    if (current.type === "rich") {
+      savedEditable =
+        current.editable;
+
+      savedStart = 0;
+      savedEnd = 0;
+      savedText = current.text;
+
+      return true;
     }
 
     return false;
   }
 
-  /*
-   * ============================================================
-   * SELECTION TRACKING
-   *
-   * We remember the LAST VALID selection.
-   *
-   * We deliberately do NOT erase it when the popup steals
-   * focus or the browser collapses the selection.
-   * ============================================================
-   */
-
-  document.addEventListener(
-    "selectionchange",
-    () => {
-      if (busy) return;
-
-      const selection = window.getSelection();
-
-      if (
-        selection &&
-        selection.rangeCount > 0 &&
-        !selection.isCollapsed
-      ) {
-        saveCurrentSelection();
-      }
-    },
-    true
-  );
-
-  document.addEventListener(
-    "mouseup",
-    () => {
-      if (busy) return;
-
-      setTimeout(() => {
-        saveCurrentSelection();
-      }, 0);
-    },
-    true
-  );
 
   /*
-   * IMPORTANT:
-   * Do not use keyup to recapture the selection.
-   *
-   * LinkedIn/X/Discord use keyboard events heavily and this can
-   * interfere with their editor state.
-   */
-
-  /*
-   * ============================================================
+   * ------------------------------------------------------------
    * MESSAGE HANDLER
-   * ============================================================
+   * ------------------------------------------------------------
    */
 
   chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
 
       /*
-       * ------------------------------------------
+       * --------------------------------------------------------
        * GET SELECTION
-       *
-       * DO NOT recapture here.
-       * The popup may already have stolen focus.
-       * ------------------------------------------
+       * --------------------------------------------------------
        */
 
-      if (message?.type === "GPT_GET_SELECTION") {
+      if (
+        message?.type ===
+        "GPT_GET_SELECTION"
+      ) {
+        const ok =
+          savedText.trim()
+            ? true
+            : saveSelection();
+
         sendResponse({
           ok: true,
-          hasSelection: !!savedText.trim()
+          hasSelection:
+            ok &&
+            !!savedText.trim()
         });
 
         return;
       }
 
+
       /*
-       * ------------------------------------------
+       * --------------------------------------------------------
        * OPEN ACTIONS
-       * ------------------------------------------
+       * --------------------------------------------------------
        */
 
-      if (message?.type === "GPT_OPEN_ACTIONS") {
+      if (
+        message?.type ===
+        "GPT_OPEN_ACTIONS"
+      ) {
+        /*
+         * Capture once, immediately.
+         */
+
+        saveSelection();
+
         showActions();
 
         sendResponse({
@@ -215,15 +276,17 @@
         return;
       }
 
+
       /*
-       * ------------------------------------------
+       * --------------------------------------------------------
        * DO ACTION
-       *
-       * DO NOT recapture here.
-       * ------------------------------------------
+       * --------------------------------------------------------
        */
 
-      if (message?.type === "GPT_DO_ACTION") {
+      if (
+        message?.type ===
+        "GPT_DO_ACTION"
+      ) {
         doAction(
           message.action || "correct"
         ).then(sendResponse);
@@ -233,10 +296,11 @@
     }
   );
 
+
   /*
-   * ============================================================
+   * ------------------------------------------------------------
    * GPT ACTION
-   * ============================================================
+   * ------------------------------------------------------------
    */
 
   async function doAction(action) {
@@ -248,264 +312,240 @@
     }
 
     /*
-     * We should normally already have a saved selection.
-     *
-     * Only attempt to find one if there genuinely isn't one.
+     * If popup/background didn't give us a saved selection,
+     * try once now.
      */
+
     if (!savedText.trim()) {
-      saveCurrentSelection();
+      saveSelection();
     }
 
     if (!savedText.trim()) {
-      showToast("Select some text first.");
+      showToast(
+        "Select some text first."
+      );
 
       return {
         ok: false,
-        error: "Select some text first."
+        error:
+          "Select some text first."
       };
     }
 
-    /*
-     * Freeze everything.
-     */
     busy = true;
 
-    const originalText = savedText;
+    const original =
+      savedText;
 
     showToast("Working…");
 
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        {
-          type: "GPT_CORRECT",
-          text: originalText,
-          action
-        },
-        (response) => {
+    return new Promise(
+      (resolve) => {
 
-          if (chrome.runtime.lastError) {
-            busy = false;
+        chrome.runtime.sendMessage(
+          {
+            type: "GPT_CORRECT",
+            text: original,
+            action
+          },
+          (response) => {
 
-            showToast(
-              "Could not reach GPT."
-            );
+            if (
+              chrome.runtime.lastError
+            ) {
+              busy = false;
 
-            resolve({
-              ok: false,
-              error:
-                chrome.runtime.lastError.message
-            });
+              showToast(
+                "Could not reach GPT."
+              );
 
-            return;
-          }
+              resolve({
+                ok: false,
+                error:
+                  chrome.runtime
+                    .lastError
+                    .message
+              });
 
-          if (!response?.ok) {
-            busy = false;
+              return;
+            }
 
-            showToast(
-              response?.error ||
-              "GPT request failed."
-            );
+            if (!response?.ok) {
+              busy = false;
 
-            resolve(
-              response || {
-                ok: false
-              }
-            );
+              showToast(
+                response?.error ||
+                "GPT request failed."
+              );
 
-            return;
-          }
+              resolve(
+                response || {
+                  ok: false
+                }
+              );
 
-          try {
-            replaceSavedSelection(
-              response.text
-            );
+              return;
+            }
 
-            showToast("Done ✓");
+            try {
+              replaceSelection(
+                response.text
+              );
 
-            busy = false;
+              showToast(
+                "Done ✓"
+              );
 
-            resolve({
-              ok: true
-            });
+              busy = false;
 
-          } catch (error) {
-            console.error(
-              "GPT Text Corrector:",
-              error
-            );
+              resolve({
+                ok: true
+              });
 
-            busy = false;
+            } catch (error) {
+              console.error(
+                "GPT Text Corrector:",
+                error
+              );
 
-            showToast(
-              error?.message ||
-              "Could not replace the selection."
-            );
+              busy = false;
 
-            resolve({
-              ok: false,
-              error:
-                error?.message ||
+              showToast(
+                error.message ||
                 "Could not replace the selection."
-            });
+              );
+
+              resolve({
+                ok: false,
+                error:
+                  error.message ||
+                  "Could not replace the selection."
+              });
+            }
           }
-        }
-      );
-    });
+        );
+      }
+    );
   }
 
+
   /*
-   * ============================================================
-   * REPLACE SAVED SELECTION
-   * ============================================================
+   * ------------------------------------------------------------
+   * REPLACE SELECTION
+   * ------------------------------------------------------------
    */
 
-  function replaceSavedSelection(text) {
+  function replaceSelection(text) {
     if (!savedEditable) {
       throw new Error(
         "Editor not found."
       );
     }
 
+
     /*
      * ==========================================================
      * INPUT / TEXTAREA
+     *
+     * SAFE
      * ==========================================================
      */
 
-    if (isTextInput(savedEditable)) {
-      const input = savedEditable;
+    if (isInput(savedEditable)) {
+      const input =
+        savedEditable;
 
       input.focus();
 
       input.setSelectionRange(
-        savedInputStart,
-        savedInputEnd
+        savedStart,
+        savedEnd
       );
 
       input.setRangeText(
         text,
-        savedInputStart,
-        savedInputEnd,
+        savedStart,
+        savedEnd,
         "end"
       );
 
       /*
-       * Notify React/Vue/etc.
+       * Notify frameworks.
        */
+
       try {
         input.dispatchEvent(
-          new InputEvent("input", {
-            bubbles: true,
-            inputType: "insertText",
-            data: text
-          })
+          new InputEvent(
+            "input",
+            {
+              bubbles: true,
+              inputType:
+                "insertText",
+              data: text
+            }
+          )
         );
       } catch {
         input.dispatchEvent(
-          new Event("input", {
-            bubbles: true
-          })
+          new Event(
+            "input",
+            {
+              bubbles: true
+            }
+          )
         );
       }
 
-      clearSavedSelection();
+      clearState();
 
       return;
     }
 
+
     /*
      * ==========================================================
-     * CONTENTEDITABLE / RICH TEXT
-     * ==========================================================
-     */
-
-    if (!savedRange) {
-      throw new Error(
-        "Rich-text selection was lost."
-      );
-    }
-
-    const editor = savedEditable;
-
-    /*
-     * Return focus to the original editor.
-     */
-    if (typeof editor.focus === "function") {
-      editor.focus();
-    }
-
-    const selection = window.getSelection();
-
-    if (!selection) {
-      throw new Error(
-        "Browser selection unavailable."
-      );
-    }
-
-    /*
-     * Restore the exact saved Range.
-     */
-    selection.removeAllRanges();
-
-    selection.addRange(
-      savedRange.cloneRange()
-    );
-
-    /*
+     * RICH TEXT
+     *
      * IMPORTANT:
      *
-     * Do NOT use:
+     * We intentionally DO NOT modify X/LinkedIn/Discord here.
      *
-     * range.deleteContents()
-     * range.insertNode()
+     * We do NOT:
      *
-     * Those directly mutate the editor DOM and can break
-     * framework-managed editors.
+     * - use execCommand()
+     * - use Range.deleteContents()
+     * - use Range.insertNode()
+     * - change innerHTML
+     * - dispatch fake keyboard events
+     *
+     * Doing those things can break framework-managed editors.
+     * ==========================================================
      */
 
-    let success = false;
-
-    try {
-      success = document.execCommand(
-        "insertText",
-        false,
-        text
-      );
-    } catch (error) {
-      console.warn(
-        "insertText failed:",
-        error
-      );
-    }
-
-    if (!success) {
-      throw new Error(
-        "This editor does not support safe text replacement."
-      );
-    }
-
-    clearSavedSelection();
+    throw new Error(
+      "This rich-text editor cannot be safely replaced yet. Your original text is unchanged."
+    );
   }
 
+
   /*
-   * ============================================================
+   * ------------------------------------------------------------
    * CLEAR
-   * ============================================================
+   * ------------------------------------------------------------
    */
 
-  function clearSavedSelection() {
+  function clearState() {
     savedEditable = null;
-    savedInputStart = 0;
-    savedInputEnd = 0;
-    savedRange = null;
+    savedStart = 0;
+    savedEnd = 0;
     savedText = "";
   }
 
+
   /*
-   * ============================================================
+   * ------------------------------------------------------------
    * TOAST
-   * ============================================================
+   * ------------------------------------------------------------
    */
 
   function showToast(message) {
@@ -515,9 +555,13 @@
       );
 
     if (!toast) {
-      toast = document.createElement("div");
+      toast =
+        document.createElement(
+          "div"
+        );
 
-      toast.id = "__gpttc_toast";
+      toast.id =
+        "__gpttc_toast";
 
       Object.assign(
         toast.style,
@@ -525,43 +569,58 @@
           position: "fixed",
           right: "18px",
           bottom: "18px",
-          zIndex: "2147483647",
-          background: "#111",
-          color: "#fff",
-          padding: "9px 13px",
-          borderRadius: "8px",
-          font: "13px Arial,sans-serif",
+          zIndex:
+            "2147483647",
+          background:
+            "#111",
+          color:
+            "#fff",
+          padding:
+            "9px 13px",
+          borderRadius:
+            "8px",
+          font:
+            "13px Arial,sans-serif",
           boxShadow:
             "0 4px 16px rgba(0,0,0,.25)",
-          pointerEvents: "none"
+          pointerEvents:
+            "none"
         }
       );
 
-      document.documentElement.appendChild(
-        toast
-      );
+      document.documentElement
+        .appendChild(toast);
     }
 
-    toast.textContent = message;
+    toast.textContent =
+      message;
 
-    clearTimeout(toast._timer);
+    clearTimeout(
+      toast._timer
+    );
 
-    toast._timer = setTimeout(() => {
-      toast.remove();
-    }, 2200);
+    toast._timer =
+      setTimeout(
+        () => {
+          toast.remove();
+        },
+        2200
+      );
   }
 
+
   /*
-   * ============================================================
+   * ------------------------------------------------------------
    * ACTION MENU
-   * ============================================================
+   * ------------------------------------------------------------
    */
 
   function showActions() {
     /*
-     * Save BEFORE creating our UI.
+     * Do NOT capture again.
+     *
+     * The selection was already saved before this UI appeared.
      */
-    saveCurrentSelection();
 
     const old =
       document.getElementById(
@@ -573,7 +632,9 @@
     }
 
     const box =
-      document.createElement("div");
+      document.createElement(
+        "div"
+      );
 
     box.id =
       "__gpttc_actions";
@@ -584,12 +645,17 @@
         position: "fixed",
         top: "70px",
         right: "18px",
-        zIndex: "2147483647",
+        zIndex:
+          "2147483647",
         width: "280px",
-        background: "#fff",
-        border: "1px solid #ddd",
-        borderRadius: "12px",
-        padding: "12px",
+        background:
+          "#fff",
+        border:
+          "1px solid #ddd",
+        borderRadius:
+          "12px",
+        padding:
+          "12px",
         boxShadow:
           "0 10px 35px rgba(0,0,0,.18)",
         font:
@@ -626,20 +692,30 @@
             "button"
           );
 
-        button.textContent = label;
+        button.textContent =
+          label;
 
         Object.assign(
           button.style,
           {
-            display: "block",
-            width: "100%",
-            padding: "9px",
-            margin: "5px 0",
-            border: "1px solid #eee",
-            borderRadius: "8px",
-            background: "#fafafa",
-            textAlign: "left",
-            cursor: "pointer"
+            display:
+              "block",
+            width:
+              "100%",
+            padding:
+              "9px",
+            margin:
+              "5px 0",
+            border:
+              "1px solid #eee",
+            borderRadius:
+              "8px",
+            background:
+              "#fafafa",
+            textAlign:
+              "left",
+            cursor:
+              "pointer"
           }
         );
 
@@ -650,46 +726,53 @@
             event.preventDefault();
             event.stopPropagation();
 
-            /*
-             * DO NOT recapture after the popup/menu has taken
-             * focus. The saved selection is the one we want.
-             */
             box.remove();
 
-            await doAction(action);
+            await doAction(
+              action
+            );
           }
         );
 
-        box.appendChild(button);
+        box.appendChild(
+          button
+        );
       }
     );
 
-    document.documentElement.appendChild(
-      box
-    );
+    document.documentElement
+      .appendChild(box);
 
     /*
-     * Clicking outside closes the menu.
+     * Close menu on outside click.
+     *
+     * We do NOT preventDefault.
+     * We do NOT touch keyboard input.
      */
+
     setTimeout(() => {
 
-      const closeMenu = (event) => {
+      const close =
+        (event) => {
 
-        if (!box.contains(event.target)) {
+          if (
+            !box.contains(
+              event.target
+            )
+          ) {
+            box.remove();
 
-          box.remove();
-
-          document.removeEventListener(
-            "mousedown",
-            closeMenu,
-            true
-          );
-        }
-      };
+            document.removeEventListener(
+              "mousedown",
+              close,
+              true
+            );
+          }
+        };
 
       document.addEventListener(
         "mousedown",
-        closeMenu,
+        close,
         true
       );
 
