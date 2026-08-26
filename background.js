@@ -238,6 +238,35 @@ chrome.runtime.onMessage.addListener(
 
     /*
      * ----------------------------------------------------------
+     * NATIVE RICH-TEXT REPLACEMENT
+     * ----------------------------------------------------------
+     */
+
+    if (message?.type === "GPT_NATIVE_REPLACE") {
+      (async () => {
+        if (!sender?.tab?.id) {
+          throw new Error("No active tab.");
+        }
+
+        await nativeReplace(
+          sender.tab.id,
+          String(message.text || "")
+        );
+
+        sendResponse({ ok: true });
+      })().catch((error) => {
+        sendResponse({
+          ok: false,
+          error: friendly(error)
+        });
+      });
+
+      return true;
+    }
+
+
+    /*
+     * ----------------------------------------------------------
      * GPT REQUEST
      * ----------------------------------------------------------
      */
@@ -330,6 +359,84 @@ async function ensureAndSend(
         ...payload
       }
     );
+  }
+}
+
+
+/* ============================================================
+   NATIVE RICH-TEXT REPLACEMENT
+
+   X / LinkedIn / Discord and similar editors keep internal
+   state that can be broken by direct DOM changes or execCommand.
+
+   Chrome's DevTools Protocol Input domain lets us send an actual
+   Backspace key operation followed by text input to the focused
+   page. The site's editor therefore receives its normal keyboard
+   and input pipeline instead of us editing its DOM.
+   ============================================================ */
+
+async function nativeReplace(tabId, text) {
+  if (!text) {
+    throw new Error("GPT returned empty text.");
+  }
+
+  let attached = false;
+
+  try {
+    await chrome.debugger.attach(
+      { tabId },
+      "1.3"
+    );
+
+    attached = true;
+
+    // Small pause so the page/editor is ready after the attach.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // Delete the currently selected text using the browser's
+    // native Backspace editing path. The content script restores
+    // the original selection before requesting this operation.
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.dispatchKeyEvent",
+      {
+        type: "keyDown",
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+        nativeVirtualKeyCode: 8
+      }
+    );
+
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.dispatchKeyEvent",
+      {
+        type: "keyUp",
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+        nativeVirtualKeyCode: 8
+      }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // Insert the GPT result through the browser input pipeline.
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.insertText",
+      { text }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach({ tabId });
+      } catch {}
+    }
   }
 }
 

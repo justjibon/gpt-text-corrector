@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V15__) return;
-  window.__GPT_TEXT_CORRECTOR_V15__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V16__) return;
+  window.__GPT_TEXT_CORRECTOR_V16__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
@@ -276,7 +276,7 @@
             text: original,
             action
           },
-          (response) => {
+          async (response) => {
 
             if (
               chrome.runtime.lastError
@@ -318,7 +318,7 @@
 
 
             try {
-              replaceSelection(
+              await replaceSelection(
                 response.text
               );
 
@@ -457,21 +457,16 @@
 
 
   // ============================================================
-  // NATIVE BEFOREINPUT ATTEMPT
+  // RICH-TEXT REPLACEMENT
   //
-  // We deliberately do NOT:
-  //
-  // - modify innerHTML
-  // - modify textContent
-  // - delete DOM nodes
-  // - insert DOM nodes
-  // - use execCommand()
-  //
-  // The event is sent to the editor so frameworks that implement
-  // their editing pipeline through beforeinput can handle it.
+  // We do not modify the DOM and we do not use execCommand().
+  // The background service worker uses Chrome's DevTools Protocol
+  // Input domain to perform Backspace + text insertion on the
+  // focused editor. That lets X / LinkedIn / Discord receive their
+  // normal keyboard/input pipeline.
   // ============================================================
 
-  function replaceRichText(text) {
+  async function replaceRichText(text) {
     if (!savedEditable) {
       throw new Error(
         "Rich-text editor not found."
@@ -484,22 +479,25 @@
       );
     }
 
-
     const selection =
-      restoreRange();
+      window.getSelection();
 
+    if (!selection) {
+      throw new Error(
+        "Browser selection is unavailable."
+      );
+    }
+
+    // Restore the exact selection that was sent to GPT.
+    selection.removeAllRanges();
+    selection.addRange(
+      savedRange.cloneRange()
+    );
 
     const currentText =
       selection.toString();
 
-
-    /*
-     * Safety check.
-     *
-     * If the user changed the selection while GPT was working,
-     * don't touch anything.
-     */
-
+    // Never replace a different selection.
     if (
       savedText &&
       currentText !== savedText
@@ -511,93 +509,51 @@
       );
     }
 
-
-    /*
-     * Give the editor focus without changing its DOM.
-     */
-
     try {
       savedEditable.focus();
     } catch {}
 
-
-    /*
-     * Restore selection after focus.
-     */
-
+    // Focus can collapse the selection on some editors, so restore it once more.
     selection.removeAllRanges();
-
     selection.addRange(
       savedRange.cloneRange()
     );
 
-
-    /*
-     * Try the browser's beforeinput editing pipeline.
-     *
-     * IMPORTANT:
-     * A synthetic event is NOT allowed to perform the browser's
-     * own default editing operation. We therefore verify whether
-     * the editor actually changed itself.
-     */
-
-    const before =
-      selection.toString();
-
-
-    let event;
-
-    try {
-      event =
-        new InputEvent(
-          "beforeinput",
+    const result =
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage(
           {
-            bubbles: true,
-            cancelable: true,
-            inputType:
-              "insertReplacementText",
-            data: text
+            type: "GPT_NATIVE_REPLACE",
+            text
+          },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              resolve({
+                ok: false,
+                error:
+                  chrome.runtime.lastError.message
+              });
+              return;
+            }
+
+            resolve(
+              response || {
+                ok: false,
+                error: "No response from background service worker."
+              }
+            );
           }
         );
-    } catch {
-      event =
-        new Event(
-          "beforeinput",
-          {
-            bubbles: true,
-            cancelable: true
-          }
-        );
-    }
-
-
-    savedEditable.dispatchEvent(
-      event
-    );
-
-
-    /*
-     * Check whether the editor handled the event itself.
-     *
-     * If it didn't, DO NOT manipulate the DOM.
-     */
-
-    const after =
-      window.getSelection()?.toString() || "";
-
-
-    if (
-      after === before
-    ) {
-      clearSelectionState();
-
-      throw new Error(
-        "This rich-text editor does not expose a safe native replacement operation."
-      );
-    }
-
+      });
 
     clearSelectionState();
+
+    if (!result?.ok) {
+      throw new Error(
+        result?.error ||
+        "Could not replace the rich-text selection."
+      );
+    }
   }
 
 
@@ -605,7 +561,7 @@
   // REPLACE SELECTION
   // ============================================================
 
-  function replaceSelection(text) {
+  async function replaceSelection(text) {
     if (!savedEditable) {
       throw new Error(
         "Editor not found."
@@ -618,7 +574,7 @@
     }
 
     if (savedType === "rich") {
-      replaceRichText(text);
+      await replaceRichText(text);
       return;
     }
 
