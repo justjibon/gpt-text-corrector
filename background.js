@@ -6,14 +6,41 @@ const DEFAULTS = {
   preview: false
 };
 
+
+/* ============================================================
+   SETTINGS
+   ============================================================ */
+
 async function settings() {
   const data = await chrome.storage.local.get(DEFAULTS);
   return { ...DEFAULTS, ...data };
 }
 
+
+/* ============================================================
+   API KEY
+   ============================================================ */
+
 async function getKey() {
   const data = await chrome.storage.local.get("apiKey");
-  return data.apiKey?.trim() || "";
+
+  /*
+   * Convert to string and remove invisible / invalid characters.
+   *
+   * HTTP headers only accept ISO-8859-1-compatible characters.
+   * OpenAI API keys themselves are ASCII, so removing accidental
+   * Unicode characters here is safe.
+   */
+
+  let key = String(data.apiKey || "");
+
+  key = key
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\r\n\t]/g, "")
+    .replace(/[^\x00-\x7F]/g, "")
+    .trim();
+
+  return key;
 }
 
 
@@ -249,10 +276,12 @@ async function ensureAndSend(
   type,
   payload = {}
 ) {
+
   /*
-   * First try the content script that is already running
+   * First try the content script already running
    * in the main page.
    */
+
   try {
     return await chrome.tabs.sendMessage(
       tabId,
@@ -269,12 +298,9 @@ async function ensureAndSend(
      * instance into the main page only.
      *
      * IMPORTANT:
-     * allFrames is intentionally FALSE.
-     *
-     * We do NOT want multiple copies of content.js running
-     * in different frames because selection belongs to the
-     * frame containing the editor.
+     * allFrames is FALSE.
      */
+
     await chrome.scripting.executeScript({
       target: {
         tabId,
@@ -283,16 +309,20 @@ async function ensureAndSend(
       files: ["content.js"]
     });
 
+
     /*
-     * Give the injected content script a moment to initialize.
+     * Give content.js a moment to initialize.
      */
+
     await new Promise((resolve) => {
       setTimeout(resolve, 100);
     });
 
+
     /*
      * Try again.
      */
+
     return await chrome.tabs.sendMessage(
       tabId,
       {
@@ -363,6 +393,7 @@ async function runGPT(
   action = "correct",
   customPrompt = ""
 ) {
+
   const key = await getKey();
 
   if (!key) {
@@ -371,6 +402,19 @@ async function runGPT(
     );
   }
 
+
+  /*
+   * Extra safety:
+   * API keys should be ASCII.
+   */
+
+  if (/[^\x00-\x7F]/.test(key)) {
+    throw new Error(
+      "Your API key contains an invalid character. Please paste your API key again."
+    );
+  }
+
+
   const s = await settings();
 
   const instruction =
@@ -378,15 +422,18 @@ async function runGPT(
     ACTIONS[action] ||
     ACTIONS.correct;
 
+
   const lang =
     s.language === "auto"
       ? "Automatically detect the source language and preserve it unless the instruction requires translation."
       : `Write the result in ${s.language}.`;
 
+
   const preserve =
     s.preserveMeaning
       ? "Preserve the user's intended meaning. Do not invent facts."
       : "You may make reasonable wording changes.";
+
 
   const system =
     `You are a concise writing assistant. ` +
@@ -397,9 +444,9 @@ async function runGPT(
     `No explanation, no quotes around it.`;
 
 
-  /* ----------------------------------------------------------
+  /* ==========================================================
      OPENAI API REQUEST
-     ---------------------------------------------------------- */
+     ========================================================== */
 
   const response = await fetch(
     "https://api.openai.com/v1/chat/completions",
@@ -408,7 +455,7 @@ async function runGPT(
 
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + key
+        "Authorization": `Bearer ${key}`
       },
 
       body: JSON.stringify({
@@ -437,9 +484,9 @@ async function runGPT(
   );
 
 
-  /* ----------------------------------------------------------
+  /* ==========================================================
      PROCESS RESPONSE
-     ---------------------------------------------------------- */
+     ========================================================== */
 
   const raw = await response.text();
 
@@ -453,12 +500,14 @@ async function runGPT(
     );
   }
 
+
   if (!response.ok) {
     throw new Error(
       data?.error?.message ||
       `OpenAI API error (${response.status})`
     );
   }
+
 
   const output =
     data?.choices?.[0]?.message?.content?.trim();
@@ -468,6 +517,7 @@ async function runGPT(
       "OpenAI returned no text."
     );
   }
+
 
   return output;
 }
