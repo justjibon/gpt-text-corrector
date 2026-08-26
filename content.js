@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V17__) return;
-  window.__GPT_TEXT_CORRECTOR_V17__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V18__) return;
+  window.__GPT_TEXT_CORRECTOR_V18__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
@@ -322,9 +322,13 @@
                 response.text
               );
 
+              window.__GPTTC_LAST_RESULT__ = response.text;
+
               showToast(
-                "Copied ✓ Press Ctrl+V to replace"
+                "Copied ✓"
               );
+
+              showReplaceBar();
 
               busy = false;
 
@@ -589,9 +593,225 @@
 
 
   // ============================================================
-  // REPLACE SELECTION
+  // FLOATING REPLACE BAR
+  // ============================================================
+
+  function showReplaceBar() {
+    removeReplaceBar();
+
+    const bar = document.createElement("div");
+    bar.id = "__gpttc_replace_bar";
+
+    Object.assign(bar.style, {
+      position: "fixed",
+      zIndex: "2147483647",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      padding: "6px",
+      background: "rgba(20,20,20,.96)",
+      border: "1px solid rgba(255,255,255,.14)",
+      borderRadius: "12px",
+      boxShadow: "0 8px 28px rgba(0,0,0,.28)",
+      font: "13px system-ui,sans-serif",
+      color: "#fff"
+    });
+
+    const replace = document.createElement("button");
+    replace.type = "button";
+    replace.textContent = "✨ Replace";
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "📋 Copy";
+
+    for (const button of [replace, copy]) {
+      Object.assign(button.style, {
+        border: "0",
+        borderRadius: "8px",
+        padding: "7px 10px",
+        background: "#fff",
+        color: "#111",
+        font: "600 12px system-ui,sans-serif",
+        cursor: "pointer"
+      });
+    }
+
+    replace.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const ok = await tryNativePaste();
+
+      if (ok) {
+        removeReplaceBar();
+        clearSelectionState();
+        showToast("Replaced ✓");
+      } else {
+        showToast("Press Ctrl+V to replace");
+        tryRestoreSelection();
+      }
+    });
+
+    copy.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (window.__GPTTC_LAST_RESULT__) {
+        try {
+          await navigator.clipboard.writeText(
+            window.__GPTTC_LAST_RESULT__
+          );
+          showToast("Copied ✓");
+        } catch {
+          showToast("Already copied ✓");
+        }
+      }
+    });
+
+    bar.appendChild(replace);
+    bar.appendChild(copy);
+    document.documentElement.appendChild(bar);
+
+    positionReplaceBar(bar);
+
+    setTimeout(() => {
+      const close = (event) => {
+        if (!bar.contains(event.target)) {
+          removeReplaceBar();
+          document.removeEventListener("mousedown", close, true);
+        }
+      };
+      document.addEventListener("mousedown", close, true);
+    }, 0);
+  }
+
+
+  function removeReplaceBar() {
+    document.getElementById("__gpttc_replace_bar")?.remove();
+  }
+
+
+  function positionReplaceBar(bar) {
+    let rect = null;
+
+    if (savedType === "rich" && savedRange) {
+      try {
+        rect = savedRange.getBoundingClientRect();
+      } catch {}
+    }
+
+    if (!rect || (!rect.width && !rect.height)) {
+      const el = savedEditable;
+      if (el) rect = el.getBoundingClientRect();
+    }
+
+    if (!rect) {
+      Object.assign(bar.style, {
+        right: "18px",
+        bottom: "18px"
+      });
+      return;
+    }
+
+    const width = 180;
+    const height = 42;
+    const gap = 8;
+
+    let left = rect.left + (rect.width / 2) - (width / 2);
+    let top = rect.bottom + gap;
+
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+
+    if (top + height > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - height - gap);
+    }
+
+    Object.assign(bar.style, {
+      left: `${left}px`,
+      top: `${top}px`
+    });
+  }
+
+
+  function tryRestoreSelection() {
+    try {
+      if (savedType === "rich" && savedRange) {
+        savedEditable?.focus();
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(savedRange.cloneRange());
+      } else if (savedType === "input" && savedEditable) {
+        savedEditable.focus();
+        savedEditable.setSelectionRange(savedStart, savedEnd);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
 
   // ============================================================
+  // NATIVE PASTE ATTEMPT
+  //
+  // This is only attempted from the user's click on the Replace
+  // button. We do NOT modify the editor DOM. If the browser or
+  // site's editor refuses programmatic paste, we safely fall back
+  // to the clipboard + Ctrl+V workflow.
+  // ============================================================
+
+  async function tryNativePaste() {
+    if (!savedEditable) return false;
+
+    tryRestoreSelection();
+
+    // Native input/textarea: replace safely through the element API.
+    if (savedType === "input") {
+      const text = window.__GPTTC_LAST_RESULT__ || "";
+      if (!text) return false;
+
+      savedEditable.setRangeText(
+        text,
+        savedStart,
+        savedEnd,
+        "end"
+      );
+
+      try {
+        savedEditable.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertReplacementText",
+            data: text
+          })
+        );
+      } catch {
+        savedEditable.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      }
+
+      savedEditable.dispatchEvent(
+        new Event("change", { bubbles: true })
+      );
+
+      return true;
+    }
+
+    // Rich-text editors: ask the browser for a native paste.
+    // This may be rejected by Chrome; that is why this function
+    // returns a boolean and never edits the DOM as a fallback.
+    const pasted = document.execCommand("paste");
+
+    return !!pasted;
+  }
+
+
+  // ============================================================
+  // REPLACE SELECTION
+  // ============================================================
+
 
   async function replaceSelection(text) {
     await copyCorrectedText(text);
