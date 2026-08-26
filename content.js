@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V13__) return;
-  window.__GPT_TEXT_CORRECTOR_V13__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V14__) return;
+  window.__GPT_TEXT_CORRECTOR_V14__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
@@ -12,7 +12,7 @@
 
 
   // ============================================================
-  // BASIC HELPERS
+  // INPUT / TEXTAREA DETECTION
   // ============================================================
 
   function isInput(el) {
@@ -37,6 +37,10 @@
   }
 
 
+  // ============================================================
+  // FIND EDITABLE ELEMENT
+  // ============================================================
+
   function findEditable(node) {
     if (!node) return null;
 
@@ -54,7 +58,7 @@
       return node;
     }
 
-    const closest = node.closest?.(
+    const editable = node.closest?.(
       [
         "textarea",
         'input[type="text"]',
@@ -66,7 +70,7 @@
       ].join(",")
     );
 
-    return closest || null;
+    return editable || null;
   }
 
 
@@ -74,23 +78,35 @@
   // CAPTURE CURRENT SELECTION
   //
   // IMPORTANT:
-  // There are NO global selectionchange / keyup / mouseup
-  // listeners.
+  // There are NO global selectionchange listeners.
+  // There are NO global keyup listeners.
+  // There are NO global mouseup listeners.
   //
-  // We only inspect the selection when the extension asks us.
+  // This is intentional so we never interfere with:
+  //
+  // - Backspace
+  // - Delete
+  // - Ctrl+X
+  // - Ctrl+C
+  // - Ctrl+V
+  // - normal typing
   // ============================================================
 
   function captureSelection() {
-    const active = findEditable(
-      document.activeElement
-    );
+    const active =
+      findEditable(
+        document.activeElement
+      );
 
 
     // ----------------------------------------------------------
     // INPUT / TEXTAREA
     // ----------------------------------------------------------
 
-    if (active && isInput(active)) {
+    if (
+      active &&
+      isInput(active)
+    ) {
       const start =
         typeof active.selectionStart === "number"
           ? active.selectionStart
@@ -137,20 +153,25 @@
       return false;
     }
 
+
     const range =
       selection.getRangeAt(0);
+
 
     const editable =
       findEditable(
         range.commonAncestorContainer
       );
 
+
     if (!editable) {
       return false;
     }
 
+
     const text =
       selection.toString();
+
 
     if (!text.trim()) {
       return false;
@@ -158,16 +179,16 @@
 
 
     /*
-     * Save a clone of the actual Range.
+     * Save a clone of the selection.
      *
-     * The range is NOT watched afterward.
-     * We only use it when GPT returns.
+     * We do NOT continuously monitor it.
      */
 
     savedEditable = editable;
     savedStart = 0;
     savedEnd = 0;
-    savedRange = range.cloneRange();
+    savedRange =
+      range.cloneRange();
     savedText = text;
     savedType = "rich";
 
@@ -176,7 +197,7 @@
 
 
   // ============================================================
-  // CLEAR
+  // CLEAR SAVED SELECTION
   // ============================================================
 
   function clearSelectionState() {
@@ -259,7 +280,7 @@
 
 
   // ============================================================
-  // GPT ACTION
+  // DO GPT ACTION
   // ============================================================
 
   async function doAction(action) {
@@ -272,10 +293,9 @@
 
 
     /*
-     * Usually the selection has already been captured by
-     * GPT_GET_SELECTION / GPT_OPEN_ACTIONS.
+     * Use the previously captured selection.
      *
-     * Only capture again if nothing was saved.
+     * Only capture again if there isn't one.
      */
 
     if (!savedText.trim()) {
@@ -298,8 +318,10 @@
 
     busy = true;
 
+
     const original =
       savedText;
+
 
     showToast(
       "Working…"
@@ -318,7 +340,7 @@
           (response) => {
 
             // --------------------------------------------------
-            // CONNECTION ERROR
+            // RUNTIME ERROR
             // --------------------------------------------------
 
             if (
@@ -369,32 +391,40 @@
             // --------------------------------------------------
 
             try {
+
               replaceSelection(
                 response.text
               );
+
 
               showToast(
                 "Done ✓"
               );
 
+
               busy = false;
+
 
               resolve({
                 ok: true
               });
 
             } catch (error) {
+
               console.error(
-                "GPT Text Corrector replacement error:",
+                "GPT Text Corrector:",
                 error
               );
 
+
               busy = false;
+
 
               showToast(
                 error?.message ||
                 "Could not replace the selection."
               );
+
 
               resolve({
                 ok: false,
@@ -418,7 +448,11 @@
     const input =
       savedEditable;
 
-    if (!input || !isInput(input)) {
+
+    if (
+      !input ||
+      !isInput(input)
+    ) {
       throw new Error(
         "Input editor not found."
       );
@@ -429,7 +463,7 @@
 
 
     /*
-     * Restore the exact original selection.
+     * Restore original selection.
      */
 
     input.setSelectionRange(
@@ -439,7 +473,7 @@
 
 
     /*
-     * Native range replacement.
+     * Replace the selected text.
      */
 
     input.setRangeText(
@@ -451,10 +485,11 @@
 
 
     /*
-     * Notify the page/framework.
+     * Notify frameworks such as React.
      */
 
     try {
+
       input.dispatchEvent(
         new InputEvent(
           "input",
@@ -466,7 +501,9 @@
           }
         )
       );
+
     } catch {
+
       input.dispatchEvent(
         new Event(
           "input",
@@ -493,10 +530,26 @@
 
 
   // ============================================================
-  // RESTORE RICH TEXT SELECTION
+  // RICH TEXT
+  //
+  // TEMPORARILY DISABLED
+  //
+  // DO NOT MODIFY THE DOM.
+  // DO NOT USE execCommand().
+  // DO NOT DELETE/INSERT DOM NODES.
+  //
+  // This is intentional.
   // ============================================================
 
-  function restoreRichSelection() {
+  function replaceRichText(text) {
+
+    if (!savedEditable) {
+      throw new Error(
+        "Rich-text editor not found."
+      );
+    }
+
+
     if (!savedRange) {
       throw new Error(
         "Original selection was lost."
@@ -504,176 +557,24 @@
     }
 
 
-    const selection =
-      window.getSelection();
-
-    if (!selection) {
-      throw new Error(
-        "Browser selection is unavailable."
-      );
-    }
-
-
     /*
-     * Restore the original Range.
-     */
-
-    selection.removeAllRanges();
-
-    selection.addRange(
-      savedRange.cloneRange()
-    );
-
-
-    /*
-     * Put focus back into the editor.
-     */
-
-    if (
-      savedEditable &&
-      typeof savedEditable.focus === "function"
-    ) {
-      savedEditable.focus();
-    }
-
-
-    /*
-     * Some editors move focus when focus() is called.
-     * Restore the range once more.
-     */
-
-    selection.removeAllRanges();
-
-    selection.addRange(
-      savedRange.cloneRange()
-    );
-
-
-    return selection;
-  }
-
-
-  // ============================================================
-  // REPLACE RICH TEXT
-  // ============================================================
-
-  function replaceRichText(text) {
-  if (!savedEditable) {
-    throw new Error("Rich-text editor not found.");
-  }
-
-  if (!savedRange) {
-    throw new Error("Original selection was lost.");
-  }
-
-  /*
-   * IMPORTANT:
-   * Do NOT use execCommand().
-   * Do NOT modify the DOM.
-   *
-   * X / LinkedIn / Discord maintain their own editor state.
-   * Direct DOM editing can make Backspace, Delete and Ctrl+X
-   * stop working.
-   */
-
-  const selection = window.getSelection();
-
-  if (!selection) {
-    throw new Error("Browser selection is unavailable.");
-  }
-
-  /*
-   * Restore focus only.
-   * Do not modify the selected text.
-   */
-
-  try {
-    savedEditable.focus();
-  } catch {}
-
-  clearSelectionState();
-
-  throw new Error(
-    "Rich-text replacement is temporarily disabled. Your original text is unchanged."
-  );
-}
-
-    /*
-     * Verify that the selected text still exists.
+     * We deliberately do NOTHING to the editor.
      *
-     * This prevents us from accidentally replacing the wrong
-     * text if the page changed while GPT was processing.
+     * This prevents X / LinkedIn / Discord from getting
+     * their internal editor state corrupted.
      */
-
-    const currentText =
-      selection.toString();
-
-    if (
-      savedText &&
-      currentText !== savedText
-    ) {
-      throw new Error(
-        "The selected text changed while GPT was working. Nothing was replaced."
-      );
-    }
-
-
-    /*
-     * ========================================================
-     * IMPORTANT
-     *
-     * We use the browser's editing command here instead of
-     * manually deleting/inserting DOM nodes.
-     *
-     * This is much safer for framework-controlled editors than:
-     *
-     *   range.deleteContents()
-     *   range.insertNode()
-     *
-     * because those operations modify the DOM behind the
-     * editor's internal state.
-     * ========================================================
-     */
-
-    let success = false;
 
     try {
-      success =
-        document.execCommand(
-          "insertText",
-          false,
-          text
-        );
-    } catch (error) {
-      console.warn(
-        "execCommand insertText failed:",
-        error
-      );
-    }
+      savedEditable.focus();
+    } catch {}
 
-
-    /*
-     * Do NOT manually manipulate the DOM if execCommand fails.
-     *
-     * That is exactly what caused problems with framework
-     * editors in previous versions.
-     */
-
-    if (!success) {
-      throw new Error(
-        "This rich-text editor does not allow safe text replacement."
-      );
-    }
-
-
-    /*
-     * The browser performed the edit.
-     *
-     * Do not dispatch a second fake input event here.
-     * execCommand normally causes the browser's editing events.
-     */
 
     clearSelectionState();
+
+
+    throw new Error(
+      "Rich-text replacement is temporarily disabled. Your original text is unchanged."
+    );
   }
 
 
@@ -682,6 +583,7 @@
   // ============================================================
 
   function replaceSelection(text) {
+
     if (!savedEditable) {
       throw new Error(
         "Editor not found."
@@ -712,19 +614,24 @@
   // ============================================================
 
   function showToast(message) {
+
     let toast =
       document.getElementById(
         "__gpttc_toast"
       );
 
+
     if (!toast) {
+
       toast =
         document.createElement(
           "div"
         );
 
+
       toast.id =
         "__gpttc_toast";
+
 
       Object.assign(
         toast.style,
@@ -751,6 +658,7 @@
         }
       );
 
+
       document.documentElement
         .appendChild(toast);
     }
@@ -759,9 +667,11 @@
     toast.textContent =
       message;
 
+
     clearTimeout(
       toast._timer
     );
+
 
     toast._timer =
       setTimeout(
@@ -784,6 +694,7 @@
         "__gpttc_actions"
       );
 
+
     if (old) {
       old.remove();
     }
@@ -793,6 +704,7 @@
       document.createElement(
         "div"
       );
+
 
     box.id =
       "__gpttc_actions";
@@ -856,6 +768,11 @@
             "button"
           );
 
+
+        button.type =
+          "button";
+
+
         button.textContent =
           label;
 
@@ -893,7 +810,9 @@
 
             event.stopPropagation();
 
+
             box.remove();
+
 
             await doAction(
               action
@@ -913,39 +832,43 @@
       .appendChild(box);
 
 
-    /*
-     * Close menu if the user clicks outside.
-     */
+    // ----------------------------------------------------------
+    // CLOSE WHEN CLICKING OUTSIDE
+    // ----------------------------------------------------------
 
-    setTimeout(() => {
+    setTimeout(
+      () => {
 
-      const close =
-        (event) => {
+        const close =
+          (event) => {
 
-          if (
-            !box.contains(
-              event.target
-            )
-          ) {
+            if (
+              !box.contains(
+                event.target
+              )
+            ) {
 
-            box.remove();
-
-            document.removeEventListener(
-              "mousedown",
-              close,
-              true
-            );
-          }
-        };
+              box.remove();
 
 
-      document.addEventListener(
-        "mousedown",
-        close,
-        true
-      );
+              document.removeEventListener(
+                "mousedown",
+                close,
+                true
+              );
+            }
+          };
 
-    }, 0);
+
+        document.addEventListener(
+          "mousedown",
+          close,
+          true
+        );
+
+      },
+      0
+    );
   }
 
 })();
