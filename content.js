@@ -1,6 +1,6 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V14__) return;
-  window.__GPT_TEXT_CORRECTOR_V14__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V15__) return;
+  window.__GPT_TEXT_CORRECTOR_V15__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
@@ -10,9 +10,8 @@
   let savedType = null;
   let busy = false;
 
-
   // ============================================================
-  // INPUT / TEXTAREA DETECTION
+  // EDITOR DETECTION
   // ============================================================
 
   function isInput(el) {
@@ -36,11 +35,6 @@
     return false;
   }
 
-
-  // ============================================================
-  // FIND EDITABLE ELEMENT
-  // ============================================================
-
   function findEditable(node) {
     if (!node) return null;
 
@@ -58,7 +52,7 @@
       return node;
     }
 
-    const editable = node.closest?.(
+    const closest = node.closest?.(
       [
         "textarea",
         'input[type="text"]',
@@ -70,43 +64,23 @@
       ].join(",")
     );
 
-    return editable || null;
+    return closest || null;
   }
 
 
   // ============================================================
-  // CAPTURE CURRENT SELECTION
-  //
-  // IMPORTANT:
-  // There are NO global selectionchange listeners.
-  // There are NO global keyup listeners.
-  // There are NO global mouseup listeners.
-  //
-  // This is intentional so we never interfere with:
-  //
-  // - Backspace
-  // - Delete
-  // - Ctrl+X
-  // - Ctrl+C
-  // - Ctrl+V
-  // - normal typing
+  // CAPTURE SELECTION
   // ============================================================
 
   function captureSelection() {
     const active =
-      findEditable(
-        document.activeElement
-      );
-
+      findEditable(document.activeElement);
 
     // ----------------------------------------------------------
     // INPUT / TEXTAREA
     // ----------------------------------------------------------
 
-    if (
-      active &&
-      isInput(active)
-    ) {
+    if (active && isInput(active)) {
       const start =
         typeof active.selectionStart === "number"
           ? active.selectionStart
@@ -139,7 +113,7 @@
 
 
     // ----------------------------------------------------------
-    // CONTENTEDITABLE / RICH TEXT
+    // RICH TEXT
     // ----------------------------------------------------------
 
     const selection =
@@ -153,42 +127,31 @@
       return false;
     }
 
-
     const range =
       selection.getRangeAt(0);
-
 
     const editable =
       findEditable(
         range.commonAncestorContainer
       );
 
-
     if (!editable) {
       return false;
     }
 
-
     const text =
       selection.toString();
-
 
     if (!text.trim()) {
       return false;
     }
 
-
-    /*
-     * Save a clone of the selection.
-     *
-     * We do NOT continuously monitor it.
-     */
-
     savedEditable = editable;
-    savedStart = 0;
-    savedEnd = 0;
     savedRange =
       range.cloneRange();
+
+    savedStart = 0;
+    savedEnd = 0;
     savedText = text;
     savedType = "rich";
 
@@ -197,7 +160,7 @@
 
 
   // ============================================================
-  // CLEAR SAVED SELECTION
+  // CLEAR
   // ============================================================
 
   function clearSelectionState() {
@@ -217,31 +180,23 @@
   chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
 
-      // --------------------------------------------------------
-      // GET SELECTION
-      // --------------------------------------------------------
-
       if (
         message?.type ===
         "GPT_GET_SELECTION"
       ) {
-        const captured =
+        const ok =
           captureSelection();
 
         sendResponse({
           ok: true,
           hasSelection:
-            captured &&
+            ok &&
             !!savedText.trim()
         });
 
         return;
       }
 
-
-      // --------------------------------------------------------
-      // OPEN ACTIONS
-      // --------------------------------------------------------
 
       if (
         message?.type ===
@@ -261,10 +216,6 @@
       }
 
 
-      // --------------------------------------------------------
-      // DO ACTION
-      // --------------------------------------------------------
-
       if (
         message?.type ===
         "GPT_DO_ACTION"
@@ -280,7 +231,7 @@
 
 
   // ============================================================
-  // DO GPT ACTION
+  // GPT ACTION
   // ============================================================
 
   async function doAction(action) {
@@ -291,17 +242,9 @@
       };
     }
 
-
-    /*
-     * Use the previously captured selection.
-     *
-     * Only capture again if there isn't one.
-     */
-
     if (!savedText.trim()) {
       captureSelection();
     }
-
 
     if (!savedText.trim()) {
       showToast(
@@ -315,18 +258,14 @@
       };
     }
 
-
     busy = true;
-
 
     const original =
       savedText;
 
-
     showToast(
       "Working…"
     );
-
 
     return new Promise(
       (resolve) => {
@@ -338,10 +277,6 @@
             action
           },
           (response) => {
-
-            // --------------------------------------------------
-            // RUNTIME ERROR
-            // --------------------------------------------------
 
             if (
               chrome.runtime.lastError
@@ -364,10 +299,6 @@
             }
 
 
-            // --------------------------------------------------
-            // GPT ERROR
-            // --------------------------------------------------
-
             if (!response?.ok) {
               busy = false;
 
@@ -386,45 +317,33 @@
             }
 
 
-            // --------------------------------------------------
-            // REPLACE
-            // --------------------------------------------------
-
             try {
-
               replaceSelection(
                 response.text
               );
-
 
               showToast(
                 "Done ✓"
               );
 
-
               busy = false;
-
 
               resolve({
                 ok: true
               });
 
             } catch (error) {
-
               console.error(
                 "GPT Text Corrector:",
                 error
               );
 
-
               busy = false;
-
 
               showToast(
                 error?.message ||
                 "Could not replace the selection."
               );
-
 
               resolve({
                 ok: false,
@@ -441,13 +360,12 @@
 
 
   // ============================================================
-  // REPLACE INPUT / TEXTAREA
+  // INPUT / TEXTAREA REPLACEMENT
   // ============================================================
 
   function replaceInput(text) {
     const input =
       savedEditable;
-
 
     if (
       !input ||
@@ -458,23 +376,12 @@
       );
     }
 
-
     input.focus();
-
-
-    /*
-     * Restore original selection.
-     */
 
     input.setSelectionRange(
       savedStart,
       savedEnd
     );
-
-
-    /*
-     * Replace the selected text.
-     */
 
     input.setRangeText(
       text,
@@ -483,27 +390,19 @@
       "end"
     );
 
-
-    /*
-     * Notify frameworks such as React.
-     */
-
     try {
-
       input.dispatchEvent(
         new InputEvent(
           "input",
           {
             bubbles: true,
             inputType:
-              "insertText",
+              "insertReplacementText",
             data: text
           }
         )
       );
-
     } catch {
-
       input.dispatchEvent(
         new Event(
           "input",
@@ -514,7 +413,6 @@
       );
     }
 
-
     input.dispatchEvent(
       new Event(
         "change",
@@ -524,31 +422,61 @@
       )
     );
 
-
     clearSelectionState();
   }
 
 
   // ============================================================
-  // RICH TEXT
+  // RESTORE RICH-TEXT SELECTION
+  // ============================================================
+
+  function restoreRange() {
+    if (!savedRange) {
+      throw new Error(
+        "Original selection was lost."
+      );
+    }
+
+    const selection =
+      window.getSelection();
+
+    if (!selection) {
+      throw new Error(
+        "Browser selection is unavailable."
+      );
+    }
+
+    selection.removeAllRanges();
+
+    selection.addRange(
+      savedRange.cloneRange()
+    );
+
+    return selection;
+  }
+
+
+  // ============================================================
+  // NATIVE BEFOREINPUT ATTEMPT
   //
-  // TEMPORARILY DISABLED
+  // We deliberately do NOT:
   //
-  // DO NOT MODIFY THE DOM.
-  // DO NOT USE execCommand().
-  // DO NOT DELETE/INSERT DOM NODES.
+  // - modify innerHTML
+  // - modify textContent
+  // - delete DOM nodes
+  // - insert DOM nodes
+  // - use execCommand()
   //
-  // This is intentional.
+  // The event is sent to the editor so frameworks that implement
+  // their editing pipeline through beforeinput can handle it.
   // ============================================================
 
   function replaceRichText(text) {
-
     if (!savedEditable) {
       throw new Error(
         "Rich-text editor not found."
       );
     }
-
 
     if (!savedRange) {
       throw new Error(
@@ -557,11 +485,35 @@
     }
 
 
+    const selection =
+      restoreRange();
+
+
+    const currentText =
+      selection.toString();
+
+
     /*
-     * We deliberately do NOTHING to the editor.
+     * Safety check.
      *
-     * This prevents X / LinkedIn / Discord from getting
-     * their internal editor state corrupted.
+     * If the user changed the selection while GPT was working,
+     * don't touch anything.
+     */
+
+    if (
+      savedText &&
+      currentText !== savedText
+    ) {
+      clearSelectionState();
+
+      throw new Error(
+        "The selected text changed while GPT was working. Nothing was replaced."
+      );
+    }
+
+
+    /*
+     * Give the editor focus without changing its DOM.
      */
 
     try {
@@ -569,12 +521,83 @@
     } catch {}
 
 
-    clearSelectionState();
+    /*
+     * Restore selection after focus.
+     */
 
+    selection.removeAllRanges();
 
-    throw new Error(
-      "Rich-text replacement is temporarily disabled. Your original text is unchanged."
+    selection.addRange(
+      savedRange.cloneRange()
     );
+
+
+    /*
+     * Try the browser's beforeinput editing pipeline.
+     *
+     * IMPORTANT:
+     * A synthetic event is NOT allowed to perform the browser's
+     * own default editing operation. We therefore verify whether
+     * the editor actually changed itself.
+     */
+
+    const before =
+      selection.toString();
+
+
+    let event;
+
+    try {
+      event =
+        new InputEvent(
+          "beforeinput",
+          {
+            bubbles: true,
+            cancelable: true,
+            inputType:
+              "insertReplacementText",
+            data: text
+          }
+        );
+    } catch {
+      event =
+        new Event(
+          "beforeinput",
+          {
+            bubbles: true,
+            cancelable: true
+          }
+        );
+    }
+
+
+    savedEditable.dispatchEvent(
+      event
+    );
+
+
+    /*
+     * Check whether the editor handled the event itself.
+     *
+     * If it didn't, DO NOT manipulate the DOM.
+     */
+
+    const after =
+      window.getSelection()?.toString() || "";
+
+
+    if (
+      after === before
+    ) {
+      clearSelectionState();
+
+      throw new Error(
+        "This rich-text editor does not expose a safe native replacement operation."
+      );
+    }
+
+
+    clearSelectionState();
   }
 
 
@@ -583,25 +606,21 @@
   // ============================================================
 
   function replaceSelection(text) {
-
     if (!savedEditable) {
       throw new Error(
         "Editor not found."
       );
     }
 
-
     if (savedType === "input") {
       replaceInput(text);
       return;
     }
 
-
     if (savedType === "rich") {
       replaceRichText(text);
       return;
     }
-
 
     throw new Error(
       "Unsupported editor."
@@ -614,24 +633,19 @@
   // ============================================================
 
   function showToast(message) {
-
     let toast =
       document.getElementById(
         "__gpttc_toast"
       );
 
-
     if (!toast) {
-
       toast =
         document.createElement(
           "div"
         );
 
-
       toast.id =
         "__gpttc_toast";
-
 
       Object.assign(
         toast.style,
@@ -658,20 +672,16 @@
         }
       );
 
-
       document.documentElement
         .appendChild(toast);
     }
 
-
     toast.textContent =
       message;
-
 
     clearTimeout(
       toast._timer
     );
-
 
     toast._timer =
       setTimeout(
@@ -688,27 +698,22 @@
   // ============================================================
 
   function showActions() {
-
     const old =
       document.getElementById(
         "__gpttc_actions"
       );
 
-
     if (old) {
       old.remove();
     }
-
 
     const box =
       document.createElement(
         "div"
       );
 
-
     box.id =
       "__gpttc_actions";
-
 
     Object.assign(
       box.style,
@@ -733,7 +738,6 @@
           "14px system-ui,sans-serif"
       }
     );
-
 
     box.innerHTML = `
       <b>✨ GPT Text Corrector</b>
@@ -768,14 +772,11 @@
             "button"
           );
 
-
         button.type =
           "button";
 
-
         button.textContent =
           label;
-
 
         Object.assign(
           button.style,
@@ -810,9 +811,7 @@
 
             event.stopPropagation();
 
-
             box.remove();
-
 
             await doAction(
               action
@@ -832,10 +831,6 @@
       .appendChild(box);
 
 
-    // ----------------------------------------------------------
-    // CLOSE WHEN CLICKING OUTSIDE
-    // ----------------------------------------------------------
-
     setTimeout(
       () => {
 
@@ -847,9 +842,7 @@
                 event.target
               )
             ) {
-
               box.remove();
-
 
               document.removeEventListener(
                 "mousedown",
