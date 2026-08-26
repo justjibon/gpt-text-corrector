@@ -1,18 +1,19 @@
 (() => {
-  if (window.__GPT_TEXT_CORRECTOR_V12__) return;
-  window.__GPT_TEXT_CORRECTOR_V12__ = true;
+  if (window.__GPT_TEXT_CORRECTOR_V13__) return;
+  window.__GPT_TEXT_CORRECTOR_V13__ = true;
 
   let savedEditable = null;
   let savedStart = 0;
   let savedEnd = 0;
+  let savedRange = null;
   let savedText = "";
+  let savedType = null;
   let busy = false;
 
-  /*
-   * ============================================================
-   * INPUT / TEXTAREA
-   * ============================================================
-   */
+
+  // ============================================================
+  // BASIC HELPERS
+  // ============================================================
 
   function isInput(el) {
     if (!el) return false;
@@ -36,12 +37,6 @@
   }
 
 
-  /*
-   * ============================================================
-   * FIND EDITABLE
-   * ============================================================
-   */
-
   function findEditable(node) {
     if (!node) return null;
 
@@ -59,201 +54,163 @@
       return node;
     }
 
-    const editable = node.closest?.(
+    const closest = node.closest?.(
       [
         "textarea",
         'input[type="text"]',
         'input[type="search"]',
         'input[type="email"]',
         'input[type="url"]',
-        '[contenteditable="true"]'
+        '[contenteditable="true"]',
+        '[role="textbox"]'
       ].join(",")
     );
 
-    return editable || null;
+    return closest || null;
   }
 
 
-  /*
-   * ============================================================
-   * GET CURRENT SELECTION
-   *
-   * IMPORTANT:
-   * No selectionchange listener.
-   * No keyup listener.
-   * No mouseup listener.
-   *
-   * The extension only checks the selection when explicitly
-   * requested.
-   * ============================================================
-   */
+  // ============================================================
+  // CAPTURE CURRENT SELECTION
+  //
+  // IMPORTANT:
+  // There are NO global selectionchange / keyup / mouseup
+  // listeners.
+  //
+  // We only inspect the selection when the extension asks us.
+  // ============================================================
 
-  function getSelectionNow() {
+  function captureSelection() {
     const active = findEditable(
       document.activeElement
     );
 
-    /*
-     * ----------------------------------------------------------
-     * INPUT / TEXTAREA
-     * ----------------------------------------------------------
-     */
+
+    // ----------------------------------------------------------
+    // INPUT / TEXTAREA
+    // ----------------------------------------------------------
 
     if (active && isInput(active)) {
       const start =
-        active.selectionStart ?? 0;
+        typeof active.selectionStart === "number"
+          ? active.selectionStart
+          : 0;
 
       const end =
-        active.selectionEnd ?? 0;
+        typeof active.selectionEnd === "number"
+          ? active.selectionEnd
+          : 0;
 
       if (start !== end) {
-        return {
-          type: "input",
-          editable: active,
-          start,
-          end,
-          text: active.value.substring(
+        const text =
+          active.value.substring(
             start,
             end
-          )
-        };
+          );
+
+        if (text.trim()) {
+          savedEditable = active;
+          savedStart = start;
+          savedEnd = end;
+          savedRange = null;
+          savedText = text;
+          savedType = "input";
+
+          return true;
+        }
       }
     }
 
 
-    /*
-     * ----------------------------------------------------------
-     * CONTENTEDITABLE
-     * ----------------------------------------------------------
-     */
+    // ----------------------------------------------------------
+    // CONTENTEDITABLE / RICH TEXT
+    // ----------------------------------------------------------
 
     const selection =
       window.getSelection();
 
     if (
-      selection &&
-      selection.rangeCount > 0 &&
-      !selection.isCollapsed
+      !selection ||
+      selection.rangeCount === 0 ||
+      selection.isCollapsed
     ) {
-      const range =
-        selection.getRangeAt(0);
-
-      const editable =
-        findEditable(
-          range.commonAncestorContainer
-        );
-
-      const text =
-        selection.toString();
-
-      if (
-        editable &&
-        text.trim()
-      ) {
-        return {
-          type: "rich",
-          editable,
-          text
-        };
-      }
+      return false;
     }
 
-    return null;
-  }
+    const range =
+      selection.getRangeAt(0);
 
+    const editable =
+      findEditable(
+        range.commonAncestorContainer
+      );
 
-  /*
-   * ============================================================
-   * SAVE SELECTION
-   * ============================================================
-   */
+    if (!editable) {
+      return false;
+    }
 
-  function saveSelection() {
-    const current =
-      getSelectionNow();
+    const text =
+      selection.toString();
 
-    if (!current) {
+    if (!text.trim()) {
       return false;
     }
 
 
     /*
-     * ----------------------------------------------------------
-     * INPUT / TEXTAREA
-     * ----------------------------------------------------------
+     * Save a clone of the actual Range.
+     *
+     * The range is NOT watched afterward.
+     * We only use it when GPT returns.
      */
 
-    if (current.type === "input") {
-      savedEditable =
-        current.editable;
+    savedEditable = editable;
+    savedStart = 0;
+    savedEnd = 0;
+    savedRange = range.cloneRange();
+    savedText = text;
+    savedType = "rich";
 
-      savedStart =
-        current.start;
-
-      savedEnd =
-        current.end;
-
-      savedText =
-        current.text;
-
-      return true;
-    }
-
-
-    /*
-     * ----------------------------------------------------------
-     * RICH TEXT
-     *
-     * We intentionally do NOT save a DOM Range.
-     *
-     * This prevents us from keeping a live Range inside
-     * framework-controlled editors such as X/LinkedIn/Discord.
-     * ----------------------------------------------------------
-     */
-
-    if (current.type === "rich") {
-      savedEditable =
-        current.editable;
-
-      savedStart = 0;
-      savedEnd = 0;
-      savedText = current.text;
-
-      return true;
-    }
-
-    return false;
+    return true;
   }
 
 
-  /*
-   * ============================================================
-   * MESSAGE HANDLER
-   * ============================================================
-   */
+  // ============================================================
+  // CLEAR
+  // ============================================================
+
+  function clearSelectionState() {
+    savedEditable = null;
+    savedStart = 0;
+    savedEnd = 0;
+    savedRange = null;
+    savedText = "";
+    savedType = null;
+  }
+
+
+  // ============================================================
+  // MESSAGE HANDLER
+  // ============================================================
 
   chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
 
-      /*
-       * --------------------------------------------------------
-       * GET SELECTION
-       * --------------------------------------------------------
-       */
+      // --------------------------------------------------------
+      // GET SELECTION
+      // --------------------------------------------------------
 
       if (
         message?.type ===
         "GPT_GET_SELECTION"
       ) {
-        const ok =
-          savedText.trim()
-            ? true
-            : saveSelection();
+        const captured =
+          captureSelection();
 
         sendResponse({
           ok: true,
           hasSelection:
-            ok &&
+            captured &&
             !!savedText.trim()
         });
 
@@ -261,33 +218,31 @@
       }
 
 
-      /*
-       * --------------------------------------------------------
-       * OPEN ACTIONS
-       * --------------------------------------------------------
-       */
+      // --------------------------------------------------------
+      // OPEN ACTIONS
+      // --------------------------------------------------------
 
       if (
         message?.type ===
         "GPT_OPEN_ACTIONS"
       ) {
-        saveSelection();
+        captureSelection();
 
         showActions();
 
         sendResponse({
-          ok: true
+          ok: true,
+          hasSelection:
+            !!savedText.trim()
         });
 
         return;
       }
 
 
-      /*
-       * --------------------------------------------------------
-       * DO ACTION
-       * --------------------------------------------------------
-       */
+      // --------------------------------------------------------
+      // DO ACTION
+      // --------------------------------------------------------
 
       if (
         message?.type ===
@@ -303,11 +258,9 @@
   );
 
 
-  /*
-   * ============================================================
-   * GPT ACTION
-   * ============================================================
-   */
+  // ============================================================
+  // GPT ACTION
+  // ============================================================
 
   async function doAction(action) {
     if (busy) {
@@ -319,13 +272,16 @@
 
 
     /*
-     * If there is no saved selection yet,
-     * try once to get the current selection.
+     * Usually the selection has already been captured by
+     * GPT_GET_SELECTION / GPT_OPEN_ACTIONS.
+     *
+     * Only capture again if nothing was saved.
      */
 
     if (!savedText.trim()) {
-      saveSelection();
+      captureSelection();
     }
+
 
     if (!savedText.trim()) {
       showToast(
@@ -339,12 +295,16 @@
       };
     }
 
+
     busy = true;
 
     const original =
       savedText;
 
-    showToast("Working…");
+    showToast(
+      "Working…"
+    );
+
 
     return new Promise(
       (resolve) => {
@@ -357,11 +317,9 @@
           },
           (response) => {
 
-            /*
-             * --------------------------------------------------
-             * CONNECTION ERROR
-             * --------------------------------------------------
-             */
+            // --------------------------------------------------
+            // CONNECTION ERROR
+            // --------------------------------------------------
 
             if (
               chrome.runtime.lastError
@@ -384,11 +342,9 @@
             }
 
 
-            /*
-             * --------------------------------------------------
-             * GPT ERROR
-             * --------------------------------------------------
-             */
+            // --------------------------------------------------
+            // GPT ERROR
+            // --------------------------------------------------
 
             if (!response?.ok) {
               busy = false;
@@ -408,11 +364,9 @@
             }
 
 
-            /*
-             * --------------------------------------------------
-             * REPLACE
-             * --------------------------------------------------
-             */
+            // --------------------------------------------------
+            // REPLACE
+            // --------------------------------------------------
 
             try {
               replaceSelection(
@@ -431,7 +385,7 @@
 
             } catch (error) {
               console.error(
-                "GPT Text Corrector:",
+                "GPT Text Corrector replacement error:",
                 error
               );
 
@@ -456,11 +410,257 @@
   }
 
 
-  /*
-   * ============================================================
-   * REPLACE SELECTION
-   * ============================================================
-   */
+  // ============================================================
+  // REPLACE INPUT / TEXTAREA
+  // ============================================================
+
+  function replaceInput(text) {
+    const input =
+      savedEditable;
+
+    if (!input || !isInput(input)) {
+      throw new Error(
+        "Input editor not found."
+      );
+    }
+
+
+    input.focus();
+
+
+    /*
+     * Restore the exact original selection.
+     */
+
+    input.setSelectionRange(
+      savedStart,
+      savedEnd
+    );
+
+
+    /*
+     * Native range replacement.
+     */
+
+    input.setRangeText(
+      text,
+      savedStart,
+      savedEnd,
+      "end"
+    );
+
+
+    /*
+     * Notify the page/framework.
+     */
+
+    try {
+      input.dispatchEvent(
+        new InputEvent(
+          "input",
+          {
+            bubbles: true,
+            inputType:
+              "insertText",
+            data: text
+          }
+        )
+      );
+    } catch {
+      input.dispatchEvent(
+        new Event(
+          "input",
+          {
+            bubbles: true
+          }
+        )
+      );
+    }
+
+
+    input.dispatchEvent(
+      new Event(
+        "change",
+        {
+          bubbles: true
+        }
+      )
+    );
+
+
+    clearSelectionState();
+  }
+
+
+  // ============================================================
+  // RESTORE RICH TEXT SELECTION
+  // ============================================================
+
+  function restoreRichSelection() {
+    if (!savedRange) {
+      throw new Error(
+        "Original selection was lost."
+      );
+    }
+
+
+    const selection =
+      window.getSelection();
+
+    if (!selection) {
+      throw new Error(
+        "Browser selection is unavailable."
+      );
+    }
+
+
+    /*
+     * Restore the original Range.
+     */
+
+    selection.removeAllRanges();
+
+    selection.addRange(
+      savedRange.cloneRange()
+    );
+
+
+    /*
+     * Put focus back into the editor.
+     */
+
+    if (
+      savedEditable &&
+      typeof savedEditable.focus === "function"
+    ) {
+      savedEditable.focus();
+    }
+
+
+    /*
+     * Some editors move focus when focus() is called.
+     * Restore the range once more.
+     */
+
+    selection.removeAllRanges();
+
+    selection.addRange(
+      savedRange.cloneRange()
+    );
+
+
+    return selection;
+  }
+
+
+  // ============================================================
+  // REPLACE RICH TEXT
+  // ============================================================
+
+  function replaceRichText(text) {
+    if (!savedEditable) {
+      throw new Error(
+        "Rich-text editor not found."
+      );
+    }
+
+    if (!savedRange) {
+      throw new Error(
+        "Original selection was lost."
+      );
+    }
+
+
+    /*
+     * Restore the selection.
+     */
+
+    const selection =
+      restoreRichSelection();
+
+
+    /*
+     * Verify that the selected text still exists.
+     *
+     * This prevents us from accidentally replacing the wrong
+     * text if the page changed while GPT was processing.
+     */
+
+    const currentText =
+      selection.toString();
+
+    if (
+      savedText &&
+      currentText !== savedText
+    ) {
+      throw new Error(
+        "The selected text changed while GPT was working. Nothing was replaced."
+      );
+    }
+
+
+    /*
+     * ========================================================
+     * IMPORTANT
+     *
+     * We use the browser's editing command here instead of
+     * manually deleting/inserting DOM nodes.
+     *
+     * This is much safer for framework-controlled editors than:
+     *
+     *   range.deleteContents()
+     *   range.insertNode()
+     *
+     * because those operations modify the DOM behind the
+     * editor's internal state.
+     * ========================================================
+     */
+
+    let success = false;
+
+    try {
+      success =
+        document.execCommand(
+          "insertText",
+          false,
+          text
+        );
+    } catch (error) {
+      console.warn(
+        "execCommand insertText failed:",
+        error
+      );
+    }
+
+
+    /*
+     * Do NOT manually manipulate the DOM if execCommand fails.
+     *
+     * That is exactly what caused problems with framework
+     * editors in previous versions.
+     */
+
+    if (!success) {
+      throw new Error(
+        "This rich-text editor does not allow safe text replacement."
+      );
+    }
+
+
+    /*
+     * The browser performed the edit.
+     *
+     * Do not dispatch a second fake input event here.
+     * execCommand normally causes the browser's editing events.
+     */
+
+    clearSelectionState();
+  }
+
+
+  // ============================================================
+  // REPLACE SELECTION
+  // ============================================================
 
   function replaceSelection(text) {
     if (!savedEditable) {
@@ -470,111 +670,27 @@
     }
 
 
-    /*
-     * ==========================================================
-     * INPUT / TEXTAREA
-     *
-     * These are safe to replace.
-     * ==========================================================
-     */
-
-    if (isInput(savedEditable)) {
-      const input =
-        savedEditable;
-
-      input.focus();
-
-      input.setSelectionRange(
-        savedStart,
-        savedEnd
-      );
-
-      input.setRangeText(
-        text,
-        savedStart,
-        savedEnd,
-        "end"
-      );
-
-
-      /*
-       * Notify React/Vue/etc.
-       */
-
-      try {
-        input.dispatchEvent(
-          new InputEvent(
-            "input",
-            {
-              bubbles: true,
-              inputType:
-                "insertText",
-              data: text
-            }
-          )
-        );
-      } catch {
-        input.dispatchEvent(
-          new Event(
-            "input",
-            {
-              bubbles: true
-            }
-          )
-        );
-      }
-
-      clearState();
-
+    if (savedType === "input") {
+      replaceInput(text);
       return;
     }
 
 
-    /*
-     * ==========================================================
-     * RICH TEXT
-     *
-     * IMPORTANT:
-     *
-     * We intentionally do NOT modify rich-text editors yet.
-     *
-     * We do NOT use:
-     *
-     * - execCommand()
-     * - Range.deleteContents()
-     * - Range.insertNode()
-     * - innerHTML
-     * - fake keyboard events
-     *
-     * This prevents X/LinkedIn/Discord from becoming locked.
-     * ==========================================================
-     */
+    if (savedType === "rich") {
+      replaceRichText(text);
+      return;
+    }
+
 
     throw new Error(
-      "This rich-text editor cannot be safely replaced yet. Your original text is unchanged."
+      "Unsupported editor."
     );
   }
 
 
-  /*
-   * ============================================================
-   * CLEAR STATE
-   * ============================================================
-   */
-
-  function clearState() {
-    savedEditable = null;
-    savedStart = 0;
-    savedEnd = 0;
-    savedText = "";
-  }
-
-
-  /*
-   * ============================================================
-   * TOAST
-   * ============================================================
-   */
+  // ============================================================
+  // TOAST
+  // ============================================================
 
   function showToast(message) {
     let toast =
@@ -620,6 +736,7 @@
         .appendChild(toast);
     }
 
+
     toast.textContent =
       message;
 
@@ -637,17 +754,11 @@
   }
 
 
-  /*
-   * ============================================================
-   * ACTION MENU
-   * ============================================================
-   */
+  // ============================================================
+  // ACTION MENU
+  // ============================================================
 
   function showActions() {
-    /*
-     * The selection was already captured before the menu
-     * appeared.
-     */
 
     const old =
       document.getElementById(
@@ -659,10 +770,6 @@
     }
 
 
-    /*
-     * Create menu.
-     */
-
     const box =
       document.createElement(
         "div"
@@ -670,6 +777,7 @@
 
     box.id =
       "__gpttc_actions";
+
 
     Object.assign(
       box.style,
@@ -711,18 +819,17 @@
     `;
 
 
-    /*
-     * Actions.
-     */
-
-    [
+    const actions = [
       ["correct", "✨ Correct"],
       ["professional", "💼 Professional"],
       ["casual", "😊 Casual"],
       ["shorten", "✂️ Shorten"],
       ["improve", "🧠 Improve"],
       ["translate", "🌍 Translate"]
-    ].forEach(
+    ];
+
+
+    actions.forEach(
       ([action, label]) => {
 
         const button =
@@ -732,6 +839,7 @@
 
         button.textContent =
           label;
+
 
         Object.assign(
           button.style,
@@ -763,6 +871,7 @@
           async (event) => {
 
             event.preventDefault();
+
             event.stopPropagation();
 
             box.remove();
@@ -772,6 +881,7 @@
             );
           }
         );
+
 
         box.appendChild(
           button
@@ -785,9 +895,7 @@
 
 
     /*
-     * Close when clicking outside.
-     *
-     * We do not prevent the site's normal editor behavior.
+     * Close menu if the user clicks outside.
      */
 
     setTimeout(() => {
@@ -800,6 +908,7 @@
               event.target
             )
           ) {
+
             box.remove();
 
             document.removeEventListener(
@@ -809,6 +918,7 @@
             );
           }
         };
+
 
       document.addEventListener(
         "mousedown",
