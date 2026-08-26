@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GPT Text Corrector</title>
+<style>
+html,body{margin:0;padding:0;width:360px;background:#fff;color:#18181b;font:14px Arial,sans-serif}
+*{box-sizing:border-box}
+.header{padding:16px 18px;border-bottom:1px solid #e8e8e8;display:flex;gap:11px;align-items:center}
+.logo{width:38px;height:38px;border-radius:10px;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;font-size:19px}
+h1{font-size:16px;margin:0 0 2px}.sub{font-size:12px;color:#71717a}
+.main{padding:16px}.status{padding:10px 11px;background:#f5f5f5;border-radius:9px;font-size:12px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.action{border:1px solid #ddd;background:#fafafa;border-radius:8px;padding:10px;text-align:left;font-weight:600;cursor:pointer}
+.action:hover{background:#f0f0f0}
+.custom{width:100%;margin-top:8px;border:1px solid #ccc;border-radius:8px;padding:10px;font-size:13px}
+.row{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+select{width:210px;padding:7px;border:1px solid #ccc;border-radius:7px;background:#fff}
+.settings{margin-top:14px;width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer}
+.note{font-size:11px;color:#888;text-align:center;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="header"><div class="logo">✨</div><div><h1>GPT Text Corrector</h1><div class="sub">Select text, then choose an action.</div></div></div>
+<div class="main">
+<div id="status" class="status">Select text on the page first.</div>
+<div class="grid">
+<button class="action" data-action="correct">✨ Correct</button>
+<button class="action" data-action="professional">💼 Professional</button>
+<button class="action" data-action="casual">😊 Casual</button>
+<button class="action" data-action="shorten">✂️ Shorten</button>
+<button class="action" data-action="improve">🧠 Improve</button>
+<button class="action" data-action="translate">🌍 Translate</button>
+</div>
+<input id="custom" class="custom" placeholder="✏️ Custom instruction… (press Enter)">
+<div class="row"><span>Model</span><select id="model">
+<option value="gpt-4o-mini">GPT-4o mini — $0.15 / 1M input</option>
+<option value="gpt-5-mini">GPT-5 mini — $0.25 / 1M input</option>
+<option value="gpt-4.1-mini">GPT-4.1 mini — $0.40 / 1M input</option>
+<option value="gpt-5.4-mini">GPT-5.4 mini — $0.75 / 1M input</option>
+<option value="gpt-5.6-luna">GPT-5.6 Luna — $0.20 / 1M input</option>
+<option value="gpt-5.6-terra">GPT-5.6 Terra — $2.00 / 1M input</option>
+</select></div>
+<div class="row"><span>Preserve meaning</span><input id="preserve" type="checkbox" checked></div>
+<button id="settings" class="settings">⚙ Settings / API key</button>
+<div class="note">Your API key is stored locally in Chrome.</div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
