@@ -52,5 +52,6 @@
       },
       "description": "Correct selected text with GPT"
     }
-  }
+  },
+  "author": "Nazrul Islam Jibon"
 }
